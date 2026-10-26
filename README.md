@@ -1,8 +1,10 @@
 # Team 3 PDF tester
 
 This tester runs the six provided input files against a system's `/process`
-endpoint and compares the downloaded ZIPs to the supplied expected ZIP outputs.
-It exposes only `POST /test/setup`, `POST /test/run`, and `GET /test/report`.
+endpoint using the shared v0.3.0 JSON contract. Supplied ZIPs provide the input
+fixtures and expected acceptance/rejection outcomes.
+It exposes `POST /test/setup`, `POST /test/run`, and `GET /test/report`,
+plus a browser homepage at `/`.
 
 ## Host locally on Windows
 
@@ -17,8 +19,11 @@ py -m venv .venv
 
 Keep that window open. The tester base URL is `http://127.0.0.1:8002`.
 Stop it with Ctrl+C. To restart later, run just the last command from the repo.
-No virtual-environment activation is needed. Visiting the base URL in a browser
-returns 404 because this service has three API endpoints and no homepage.
+No virtual-environment activation is needed. Open http://127.0.0.1:8002 in your
+browser to use the homepage. Enter the system URL, click Create new session,
+then Run six tests. The page displays results, coverage, and the full JSON
+report. Retrieve report recovers an existing session report without running
+tests; Download report saves it as JSON. Restart the tester after code changes.
 
 Start your target system in a separate PowerShell window. For the current Team 3
 system, using its existing Python environment:
@@ -69,19 +74,45 @@ the report instead; 409 means it has not ended yet, so try report retrieval late
 
 Inputs are in `fixtures/inputs`; reference ZIPs are in `fixtures/expected`.
 They are bundled in this repo, so running the tester does not depend on Downloads.
-All six `/process` requests include the prepared session ID and
-`Accept: application/zip`. HTTP 200 means ZIP delivery, including rejected inputs.
+Default mode is `contract`. All six `/process` requests include the prepared
+session ID and `Accept: application/json`. Oversized files must return 413,
+non-PDF files 415, and password-protected/encrypted files 422; accepted PDFs
+return 200. Error codes must match, while explanatory wording may differ.
 
-Comparisons check ZIP filenames, original bytes, all report.json fields except
-the generated evaluation_id, and byte-for-byte output PDFs. ZIP compression,
-entry order and timestamps are ignored. Generated evaluation IDs must still be
-nonempty strings. Embedded Base64 and SHA-256 must match the ZIP's PDF files.
-This is an exact regression baseline for the supplied preliminary implementation;
-changes to report wording, PDF bytes or functionality can legitimately fail it.
+Accepted responses are validated against EvaluationResult in the shared schema,
+including UUIDs, required fields, enum values and nested findings/repairs. Input
+filename, size and SHA-256 must match the uploaded bytes. Embedded output/report
+PDFs must contain PDF data and match their SHA-256. An output marked unmodified
+must equal the input. Deferred checks must be named in limitations. Another
+team may return different valid findings, repairs, generated PDFs and report
+wording; this preliminary suite does not assert accessibility correctness.
+
+The exact shared contract is saved as `shared-openapi.yaml`; the nullable-aware
+validation copy is `shared-openapi.json`. Source:
+https://github.com/arwaMoustafa04/AccessibilityProblemsChecker/blob/v0.3.0-phase3/openapi.yaml
+The source version was downloaded and checked when implementing compatibility.
+
+Optional Team 3 ZIP regression mode uses the six exact supplied outputs:
+
+```powershell
+$env:TESTER_MODE = 'zip-baseline'
+.\.venv\Scripts\python.exe -m uvicorn app:app --host 127.0.0.1 --port 8002 --workers 1
+```
+
+In this mode the tester requests application/zip and expects HTTP 200 delivery
+for all six cases. It compares ZIP members, PDF bytes, and report.json exactly,
+except generated evaluation IDs; ZIP timestamps/compression/order are ignored.
+ZIP transport is a Team 3 extension and is not required by the shared contract.
+Return to the cross-team default before starting the server with:
+
+```powershell
+$env:TESTER_MODE = 'contract'
+```
 
 These examples do not establish accessibility correctness. In particular,
-accessibilityIssues.pdf is expected to be accepted without repairs because that
-is what its supplied reference output contains. Component coverage measures only
+accessibilityIssues.pdf must be accepted, but contract mode permits repairs
+and findings from implementations that have progressed beyond input validation.
+Only optional ZIP regression mode requires its unchanged preliminary output. Component coverage measures only
 input validation and report output (up to 2 of the pod's 8 components). System
 acceptance-criterion coverage is null because their detailed definitions have
 not been supplied. Code coverage is forwarded from the target, or null with an

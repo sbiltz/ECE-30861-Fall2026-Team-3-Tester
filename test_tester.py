@@ -42,6 +42,35 @@ class Comparisons(unittest.TestCase):
         with self.assertRaises(AssertionError):
             compare(rewrite(raw,lambda r:r.update(error_code='OTHER')),raw,name,original)
 
+    def test_contract_allows_other_teams_report_wording(self):
+        from suite import validate_success
+        raw=(ROOT/'fixtures'/'expected'/'goodAccessible_review.zip').read_bytes()
+        original=(ROOT/'fixtures'/'inputs'/'goodAccessible.pdf').read_bytes()
+        with ZipFile(BytesIO(raw)) as archive:result=json.loads(archive.read('report.json'))
+        result['limitations'][0]='Another implementation; these checks are deferred.'
+        result['evaluation_id']='12345678-1234-4234-8234-123456789abc'
+        validate_success(result,'goodAccessible.pdf',original)
+        result['output_pdf']['sha256']='bad'
+        with self.assertRaises(AssertionError):validate_success(result,'goodAccessible.pdf',original)
+
+    def test_contract_uses_json_and_expected_http_errors(self):
+        import suite
+        from unittest.mock import patch
+        with patch.dict('os.environ',{'TESTER_MODE':'contract'}):
+            for test_id,name in CASES:
+                with self.subTest(name=name):
+                    raw=(ROOT/'fixtures'/'expected'/(Path(name).stem+'_review.zip')).read_bytes()
+                    with ZipFile(BytesIO(raw)) as archive:result=json.loads(archive.read('report.json'))
+                    code=result.get('error_code')
+                    status={'FILE_TOO_LARGE':413,'INVALID_FILE_TYPE':415,'PASSWORD_PROTECTED_PDF':422,'ENCRYPTED_PDF':422}.get(code,200)
+                    if code:result['message']='Different valid explanation.'
+                    with patch.object(suite,'request',return_value=(status,{'Content-Type':'application/json'},json.dumps(result).encode())) as request:
+                        outcome=suite.run_case(test_id,name,'http://example.test','session')
+                        self.assertEqual(outcome['outcome'],'pass',outcome)
+                        self.assertEqual(request.call_args.kwargs['accept'],'application/json')
+                    with patch.object(suite,'request',return_value=(200 if status!=200 else 422,{'Content-Type':'application/json'},json.dumps(result).encode())):
+                        self.assertEqual(suite.run_case(test_id,name,'http://example.test','session')['outcome'],'fail')
+
     def test_abort_keeps_report_and_consumes_session(self):
         sid='abort-test'
         app.sessions[sid]={'target_url':'http://example.test','state':'ready','report':None}

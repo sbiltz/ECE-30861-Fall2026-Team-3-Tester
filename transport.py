@@ -5,7 +5,7 @@ from urllib.request import Request, urlopen
 from urllib.error import HTTPError
 
 
-def request(method, url, *, payload=None, upload=None, session_id=None, timeout=60):
+def request(method, url, *, payload=None, upload=None, session_id=None, accept='application/zip', timeout=60):
     headers = {'Accept': 'application/json'}
     data = None
     if payload is not None:
@@ -17,7 +17,7 @@ def request(method, url, *, payload=None, upload=None, session_id=None, timeout=
         data = (f'--{boundary}\r\nContent-Disposition: form-data; name="session_id"\r\n\r\n{session_id}\r\n'
                 f'--{boundary}\r\nContent-Disposition: form-data; name="file"; filename="{filename}"\r\n'
                 'Content-Type: application/octet-stream\r\n\r\n').encode() + content + f'\r\n--{boundary}--\r\n'.encode()
-        headers = {'Accept': 'application/zip', 'Content-Type': f'multipart/form-data; boundary={boundary}'}
+        headers = {'Accept': accept, 'Content-Type': f'multipart/form-data; boundary={boundary}'}
     try:
         response = urlopen(Request(url, data=data, headers=headers, method=method), timeout=timeout)
     except HTTPError as exc:

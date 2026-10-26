@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Team 3 PDF Tester</title>
+<style>
+:root{font:16px/1.5 system-ui,sans-serif;color:#192c36;background:#f2f5f6}*{box-sizing:border-box}body{margin:0}main{max-width:1050px;margin:48px auto;padding:0 24px}header{margin-bottom:28px}.eyebrow{color:#00766c;font-size:.8rem;font-weight:750;letter-spacing:.12em}h1{font-size:2.6rem;letter-spacing:-.04em;margin:8px 0}h2{font-size:1.2rem;margin:0 0 16px}p{color:#536570}.card{background:white;border:1px solid #dce4e7;border-radius:16px;padding:24px;margin:18px 0;box-shadow:0 4px 18px #172c3605}label{display:block;font-weight:650;margin:16px 0 6px}input{width:100%;padding:12px;border:1px solid #aebfc6;border-radius:8px;font:inherit}button{border:0;border-radius:8px;background:#00766c;color:white;padding:12px 18px;font:inherit;font-weight:650;cursor:pointer}button.secondary{background:#e9f0f2;color:#263f49}button:disabled{opacity:.45;cursor:not-allowed}button:focus-visible,input:focus-visible,a:focus-visible{outline:3px solid #2687db;outline-offset:3px}.actions{display:flex;gap:12px;flex-wrap:wrap;margin-top:18px}#status{padding:14px 16px;background:#eaf3f2;border-radius:8px;overflow-wrap:anywhere}table{width:100%;border-collapse:collapse}th,td{text-align:left;border-bottom:1px solid #e1e7ea;padding:12px 8px;vertical-align:top}th{font-size:.8rem;text-transform:uppercase;color:#536570}td:last-child{overflow-wrap:anywhere}.table-wrap{overflow-x:auto}.badge{display:inline-block;border-radius:5px;padding:3px 8px;background:#edf1f3;font-size:.85rem;font-weight:700}.pass{background:#dff5e8;color:#17603a}.fail,.error{background:#fde7e6;color:#a72b28}.coverage{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}.coverage p{font-size:.85rem;overflow-wrap:anywhere}pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#f4f7f8;padding:16px;max-height:450px;overflow:auto;font-size:.8rem}small{color:#536570}a{color:#006e65}@media(max-width:650px){main{margin:24px auto;padding:0 16px}h1{font-size:2rem}.coverage{grid-template-columns:1fr}.card{padding:18px}}
+</style>
+</head>
+<body><main>
+<header><span class="eyebrow">TEAM 3 / ECE 30861</span><h1>PDF system tester</h1><p>Run six file tests against the shared API and inspect the results.</p></header>
+<section class="card" aria-labelledby="connect"><h2 id="connect">1. Prepare your target</h2>
+<label for="target">System base URL</label><input id="target" type="url" value="http://127.0.0.1:8001" placeholder="http://127.0.0.1:8001">
+<small>Start the target system first. Use its base URL without /test or /process.</small>
+<div class="actions"><button id="setup">Create new session</button><button id="run" disabled>Run six tests</button></div>
+<label for="session">Session ID</label><input id="session" placeholder="Created by setup, or paste an existing session ID" autocomplete="off">
+<div class="actions"><button id="retrieve" class="secondary">Retrieve report</button><button id="download" class="secondary" disabled>Download report</button></div>
+<p id="status" role="status" aria-live="polite">Tester is reachable. Create a session to check the target system.</p>
+</section>
+<section class="card"><h2>2. Test results <span id="summary"></span></h2><p id="empty">No tests have run yet.</p><div class="table-wrap"><table hidden id="table"><thead><tr><th>Test</th><th>Outcome</th><th>Details</th></tr></thead><tbody id="results"></tbody></table></div></section>
+<section class="card"><h2>Coverage</h2><div id="coverage" class="coverage"><p>Available after a run.</p></div><small>These tests check preliminary file validation and output. They do not verify accessibility detection or repairs.</small></section>
+<details class="card"><summary>Full JSON report</summary><pre id="json">No report available.</pre></details>
+</main>
+<script>
+const $=id=>document.getElementById(id);
+let readySession=null, savedReport=null, busy=false;
+function status(message){$('status').textContent=message;}
+function buttons(){ $('setup').disabled=busy; $('retrieve').disabled=busy; $('run').disabled=busy||!readySession||$('session').value.trim()!==readySession; $('target').disabled=busy; $('session').disabled=busy; }
+async function api(path,body){
+ const response=await fetch(path,{method:body?'POST':'GET',headers:body?{'Content-Type':'application/json'}:{},body:body?JSON.stringify(body):undefined});
+ let data;try{data=await response.json();}catch{throw new Error('The tester returned an unreadable response.');}
+ if(!response.ok)throw new Error(`HTTP ${response.status}: ${data.message||'Request failed'}${data.source?' ('+data.source+')':''}`);
+ return data;
+}
+function clearReport(){savedReport=null;$('download').disabled=true;$('results').replaceChildren();$('table').hidden=true;$('empty').hidden=false;$('summary').textContent='';$('coverage').replaceChildren();$('json').textContent='No report available.';}
+function render(report){
+ savedReport=report;$('download').disabled=false;$('results').replaceChildren();$('table').hidden=false;$('empty').hidden=true;
+ const results=report.results||[];const passed=results.filter(r=>r.outcome==='pass').length;
+ $('summary').textContent=`— ${passed}/${results.length} passed`;
+ for(const result of results){const row=document.createElement('tr');for(const [i,value] of [result.test_id,result.outcome,result.message+(result.source?' [source: '+result.source+']':'')].entries()){const cell=document.createElement('td');if(i===1){const badge=document.createElement('span');badge.className='badge '+(['pass','fail','error','skip'].includes(value)?value:'');badge.textContent=value;cell.append(badge);}else cell.textContent=value;row.append(cell);}$('results').append(row);}
+ $('coverage').replaceChildren();for(const name of ['code','component','system']){const value=report.coverage?.[name];const box=document.createElement('div');const title=document.createElement('strong');title.textContent=name[0].toUpperCase()+name.slice(1)+': '+(value?.covered==null?'Unavailable':`${value.covered} / ${value.total}`);const note=document.createElement('p');note.textContent=value?.basis||'Not reported.';box.append(title,note);$('coverage').append(box);}
+ $('json').textContent=JSON.stringify(report,null,2);
+}
+$('session').addEventListener('input',buttons);
+$('setup').addEventListener('click',async()=>{busy=true;readySession=null;buttons();clearReport();$('session').value='';status('Preparing target system…');try{const result=await api('test/setup',{target_url:$('target').value.trim()});readySession=result.session_id;$('session').value=result.session_id;status('Target is ready. Run the six tests.');}catch(error){status(error.message);}finally{busy=false;buttons();}});
+$('run').addEventListener('click',async()=>{const sid=readySession;if(!sid)return;busy=true;readySession=null;buttons();clearReport();status('Running six tests. This can take several minutes; keep this page open.');try{render(await api('test/run',{session_id:sid}));status('Run finished. Review the results below. Create a new session to run again.');}catch(error){status(error.message+' Retrieve the report for available results; do not repeat the run.');}finally{busy=false;buttons();}});
+$('retrieve').addEventListener('click',async()=>{const sid=$('session').value.trim();if(!sid){status('Enter a session ID first.');return;}busy=true;buttons();status('Retrieving saved report…');try{const report=await api('test/report?session_id='+encodeURIComponent(sid));readySession=null;render(report);status('Saved report retrieved. No tests were rerun.');}catch(error){status(error.message+' If the report is not ready, try retrieving it again later.');}finally{busy=false;buttons();}});
+$('download').addEventListener('click',()=>{if(!savedReport)return;const url=URL.createObjectURL(new Blob([JSON.stringify(savedReport,null,2)],{type:'application/json'}));const link=document.createElement('a');link.href=url;link.download='tester-report.json';link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);});
+</script></body></html>

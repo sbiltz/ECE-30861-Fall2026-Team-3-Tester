@@ -1,0 +1,1130 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Pod PDF Accessibility Evaluation and Remediation API",
+    "version": "0.3.0",
+    "description": "Common web-service interface shared by Team 1 and Team 3 for cross-team testing.\nEach team implements this contract independently. Tests target a team by its base URL.\n\nProject API (pod-defined): GET /health, GET /checks, POST /process.\nCourse test endpoints (required on every system): POST /test/setup, GET /test/report.\n\nState: PDFs are never stored; every /process request is independent and no reset\nis needed between tests. The only state a system keeps is its list of test\nsessions and the code coverage measured for each one (see /test/setup).\nSessions are kept in memory until the service restarts. No authentication is required.\nLimits: maximum file size 20 MB (20,971,520 bytes); no maximum page count.\nEncrypted or password-protected PDFs are not supported.\n\nChanges in 0.3.0: POST /evaluations renamed to POST /process; optional session_id\nform field added to /process; /test/setup and /test/report added; x-pod-testing\nnotes added (components, acceptance criteria, sessions, timing).\n"
+  },
+  "servers": [
+    {
+      "url": "{baseUrl}",
+      "description": "Base URL supplied by the team under test (never hard-coded)",
+      "variables": {
+        "baseUrl": {
+          "default": "http://localhost:8000"
+        }
+      }
+    }
+  ],
+  "x-limits": {
+    "max_file_size_bytes": 20971520,
+    "max_pages": null
+  },
+  "x-pod-testing": {
+    "description": "Pod rules for the course's cross-team testing interface. Each team's tester calls a target system's /test/setup, then the project API below, then the target's /test/report, and returns one suite report.\n",
+    "setup_data": "Testers send {\"session_id\": \"<uuid>\", \"setup\": {}}. No starting data is needed.\n",
+    "session_identification": "Testers send the session ID as the optional session_id form field on every POST /process request, so the system can attribute code coverage to that session. GET /health and GET /checks take no session ID. A /process request without a session_id, or with an unknown one, is still processed normally; it just is not counted toward any session's coverage.\n",
+    "resets_and_cleanup": "None needed. /process keeps no data between requests, so tests may run in any order and do not interfere. Session records are kept until the service restarts.\n",
+    "concurrency": "Multiple sessions may exist at once. A system may process session-tagged requests one at a time to measure coverage accurately.\n",
+    "timing": {
+      "project_call_limit_seconds": 60,
+      "retries": "Testers do not retry project calls. A call with no response within 60 seconds is recorded as outcome \"error\" with source \"communication\".\n",
+      "system_setup_limit_seconds": 10
+    },
+    "components": {
+      "description": "Component coverage counts how many of these components the suite exercised. A component is exercised when at least one test sends a request whose expected response depends on that component.\n",
+      "list": [
+        {
+          "id": "COMP-HEALTH",
+          "name": "Health endpoint",
+          "exercised_by": "any GET /health test"
+        },
+        {
+          "id": "COMP-CATALOG",
+          "name": "Check catalog",
+          "exercised_by": "any GET /checks test"
+        },
+        {
+          "id": "COMP-VALIDATION",
+          "name": "Input validation",
+          "exercised_by": "any /process test expecting 400, 413, 415, or 422"
+        },
+        {
+          "id": "COMP-DETECTION",
+          "name": "Accessibility checks",
+          "exercised_by": "a /process test with expected findings"
+        },
+        {
+          "id": "COMP-CLASSIFICATION",
+          "name": "Issue classification",
+          "exercised_by": "a /process test checking finding classification"
+        },
+        {
+          "id": "COMP-REPAIR",
+          "name": "Automatic repair",
+          "exercised_by": "a /process test with an auto-fixable issue that checks repairs and output_pdf"
+        },
+        {
+          "id": "COMP-REVALIDATION",
+          "name": "Post-repair validation",
+          "exercised_by": "a /process test checking repairs[].validation_result"
+        },
+        {
+          "id": "COMP-REPORT",
+          "name": "Accessibility report output",
+          "exercised_by": "a /process test checking report_pdf and compliance_statement"
+        }
+      ]
+    },
+    "system_coverage": {
+      "description": "System coverage counts how many of the pod's acceptance criteria (Phase 2 report, Section 4.1) the suite exercised. A criterion is exercised when at least one test performs the check that criterion describes.\n",
+      "acceptance_criteria": [
+        "AC-01",
+        "AC-02",
+        "AC-03",
+        "AC-04",
+        "AC-05",
+        "AC-06",
+        "AC-07",
+        "AC-08",
+        "AC-09",
+        "AC-10"
+      ]
+    }
+  },
+  "paths": {
+    "/health": {
+      "get": {
+        "operationId": "getHealth",
+        "summary": "Confirm the service is reachable before a test run",
+        "description": "Lets the cross-team test harness confirm that a team's base URL is live and which version of this spec it implements. No state change.\n",
+        "x-requirements": [
+          "REQ-16"
+        ],
+        "responses": {
+          "200": {
+            "description": "Service is running",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Health"
+                },
+                "example": {
+                  "status": "ok",
+                  "spec_version": "0.3.0"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/checks": {
+      "get": {
+        "operationId": "listChecks",
+        "summary": "List the accessibility checks this implementation performs",
+        "description": "Returns the pod's agreed check set, each with its WCAG 2.1 success criterion, level, and classification, so both teams can confirm they evaluate the same things before results are compared. No state change.\n",
+        "x-requirements": [
+          "REQ-03",
+          "REQ-05",
+          "REQ-06"
+        ],
+        "responses": {
+          "200": {
+            "description": "The agreed check set implemented by this service",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CheckList"
+                },
+                "example": {
+                  "checks": [
+                    {
+                      "check_id": "CHK-NONTEXT",
+                      "name": "Non-text Content",
+                      "wcag_criterion": "1.1.1",
+                      "wcag_level": "A",
+                      "classification": "human_review"
+                    },
+                    {
+                      "check_id": "CHK-STRUCTURE",
+                      "name": "Info and Relationships",
+                      "wcag_criterion": "1.3.1",
+                      "wcag_level": "A",
+                      "classification": "human_review"
+                    },
+                    {
+                      "check_id": "CHK-SENSORY",
+                      "name": "Sensory Characteristics",
+                      "wcag_criterion": "1.3.3",
+                      "wcag_level": "A",
+                      "classification": "human_review"
+                    },
+                    {
+                      "check_id": "CHK-COLOR",
+                      "name": "Use of Color",
+                      "wcag_criterion": "1.4.1",
+                      "wcag_level": "A",
+                      "classification": "human_review"
+                    },
+                    {
+                      "check_id": "CHK-TITLE",
+                      "name": "Page Titled",
+                      "wcag_criterion": "2.4.2",
+                      "wcag_level": "A",
+                      "classification": "auto_fixable"
+                    },
+                    {
+                      "check_id": "CHK-LINK",
+                      "name": "Link Purpose (In Context)",
+                      "wcag_criterion": "2.4.4",
+                      "wcag_level": "A",
+                      "classification": "human_review"
+                    },
+                    {
+                      "check_id": "CHK-HEADINGS",
+                      "name": "Headings and Labels",
+                      "wcag_criterion": "2.4.6",
+                      "wcag_level": "AA",
+                      "classification": "human_review"
+                    },
+                    {
+                      "check_id": "CHK-LANG",
+                      "name": "Language of Page",
+                      "wcag_criterion": "3.1.1",
+                      "wcag_level": "A",
+                      "classification": "auto_fixable"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/process": {
+      "post": {
+        "operationId": "processPdf",
+        "summary": "Evaluate a PDF, repair safe issues, re-validate, and return results",
+        "description": "Runs the full pipeline on one uploaded PDF in a single request:\nvalidate input, run all eight agreed checks, classify each issue,\nrepair auto-fixable issues on a copy, re-run the affected checks, and\nreturn the output PDF, the accessibility report PDF, and structured results.\n\nProcessing stages (state changes within one request):\n  1. RECEIVED     - file arrives; nothing has been evaluated yet\n  2. VALIDATED    - file type, readability, encryption/password, and size checked;\n                    any failure ends the request with an error response (status: error)\n  3. EVALUATED    - every check listed in checks_performed has run; findings recorded\n  4. CLASSIFIED   - each finding is auto_fixable or human_review, never both\n  5. REPAIRED     - only CHK-TITLE and CHK-LANG findings are fixed, on a copy;\n                    the uploaded file is never changed\n  6. REVALIDATED  - CHK-TITLE and CHK-LANG re-run on the repaired copy\n  7. REPORTED     - output PDF, report PDF, and JSON results returned (status: completed)\nNothing about the PDF is stored after the response is sent. If session_id names a\nsession created by /test/setup, the system also records code coverage for it.\n\nHow to interpret a 200 response:\n  - outcome says whether any repairs were applied.\n  - Every finding has exactly one classification and one final status.\n  - repairs lists each attempted fix and whether it passed re-validation.\n  - new_issues_after_repair lists problems the repairs introduced.\n  - needs_human_review findings are unresolved by design, not system failures.\n  - An empty array means \"none found\", never \"not checked\".\n  - checks_performed lists only the checks that actually ran. Until all eight are\n    implemented (Phase 4), a check missing from this list was not performed and\n    must be named in limitations.\n  - compliance_statement is fixed text; a 200 never means the PDF is compliant.\n",
+        "x-requirements": [
+          "REQ-01",
+          "REQ-02",
+          "REQ-03",
+          "REQ-04",
+          "REQ-05",
+          "REQ-06",
+          "REQ-07",
+          "REQ-08",
+          "REQ-09",
+          "REQ-10",
+          "REQ-11",
+          "REQ-12",
+          "REQ-13",
+          "REQ-14",
+          "REQ-15",
+          "REQ-16",
+          "REQ-17"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "file"
+                ],
+                "properties": {
+                  "file": {
+                    "type": "string",
+                    "format": "binary",
+                    "description": "The PDF to evaluate. Must be a readable PDF, no larger than 20,971,520 bytes, and not encrypted or password-protected.\n"
+                  },
+                  "session_id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Optional. Test session ID from /test/setup, so the system can attribute code coverage to that session. Missing or unknown IDs do not change the response.\n"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Processing completed; both output PDFs and results returned",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EvaluationResult"
+                },
+                "example": {
+                  "evaluation_id": "3f6c2a9e-1b7d-4c1e-9a52-0d8e7f4b21aa",
+                  "status": "completed",
+                  "input": {
+                    "file_name": "example_missing_language.pdf",
+                    "sha256": "9b1f...e4",
+                    "size_bytes": 482113
+                  },
+                  "outcome": "completed_with_repairs",
+                  "checks_performed": [
+                    "CHK-NONTEXT",
+                    "CHK-STRUCTURE",
+                    "CHK-SENSORY",
+                    "CHK-COLOR",
+                    "CHK-TITLE",
+                    "CHK-LINK",
+                    "CHK-HEADINGS",
+                    "CHK-LANG"
+                  ],
+                  "findings": [
+                    {
+                      "finding_id": "F-1",
+                      "check_id": "CHK-LANG",
+                      "issue_type": "missing_document_language",
+                      "wcag_criterion": "3.1.1",
+                      "wcag_level": "A",
+                      "location": {
+                        "page": null,
+                        "object_ref": "Catalog/Lang",
+                        "description": "Document-level language is not set"
+                      },
+                      "evaluation_result": "fail",
+                      "classification": "auto_fixable",
+                      "status": "fixed",
+                      "fix_description": "Set document language to en-US"
+                    },
+                    {
+                      "finding_id": "F-2",
+                      "check_id": "CHK-NONTEXT",
+                      "issue_type": "alt_text_needs_review",
+                      "wcag_criterion": "1.1.1",
+                      "wcag_level": "A",
+                      "location": {
+                        "page": 2,
+                        "object_ref": "Figure 1",
+                        "description": "Image on page 2 with alt text \"image1\""
+                      },
+                      "evaluation_result": "needs_review",
+                      "classification": "human_review",
+                      "status": "needs_human_review",
+                      "fix_description": null
+                    }
+                  ],
+                  "repairs": [
+                    {
+                      "repair_id": "R-1",
+                      "finding_id": "F-1",
+                      "action": "Set document language to en-US",
+                      "validation_result": "passed"
+                    }
+                  ],
+                  "new_issues_after_repair": [],
+                  "human_review_items": [
+                    "F-2"
+                  ],
+                  "summary": {
+                    "total_issues": 2,
+                    "fixed_count": 1,
+                    "human_review_count": 1
+                  },
+                  "limitations": [
+                    "Checks 1.1.1",
+                    "1.3.1",
+                    "1.3.3",
+                    "1.4.1",
+                    "2.4.4",
+                    "and 2.4.6 require human judgment and were not repaired"
+                  ],
+                  "compliance_statement": "This report does not certify ADA Title II or WCAG 2.1 conformance.",
+                  "output_pdf": {
+                    "file_name": "example_missing_language_repaired.pdf",
+                    "media_type": "application/pdf",
+                    "sha256": "71ac...0d",
+                    "modified": true,
+                    "content_base64": "JVBERi0xLjcK..."
+                  },
+                  "report_pdf": {
+                    "file_name": "example_missing_language_report.pdf",
+                    "media_type": "application/pdf",
+                    "sha256": "c3d2...9f",
+                    "content_base64": "JVBERi0xLjcK..."
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/MissingFile"
+          },
+          "413": {
+            "$ref": "#/components/responses/FileTooLarge"
+          },
+          "415": {
+            "$ref": "#/components/responses/InvalidFileType"
+          },
+          "422": {
+            "$ref": "#/components/responses/UnprocessablePdf"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProcessingError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ExternalServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/test/setup": {
+      "post": {
+        "operationId": "testSetup",
+        "tags": [
+          "course-testing"
+        ],
+        "summary": "Prepare a test session (course cross-team testing interface)",
+        "description": "Called by a tester (or by staff) before a suite runs. Registers the supplied session ID so later /process calls tagged with it are counted toward its code coverage. No starting data is needed, so the session is ready immediately. Does not run tests. Must stay reachable at all times.\n",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetupRequest"
+              },
+              "example": {
+                "session_id": "6b1f9a52-3c0e-4f43-9d6e-2a7c1b8e4d10",
+                "setup": {}
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Session ready; the same ID is returned",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionRef"
+                },
+                "example": {
+                  "session_id": "6b1f9a52-3c0e-4f43-9d6e-2a7c1b8e4d10"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/TestBadRequest"
+          },
+          "409": {
+            "description": "A session with this ID already exists",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TestError"
+                },
+                "example": {
+                  "message": "Session 6b1f9a52-3c0e-4f43-9d6e-2a7c1b8e4d10 already exists.",
+                  "source": "system"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Preparation failed; the tester returns this to its caller and does not run the suite",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TestError"
+                },
+                "example": {
+                  "message": "Could not initialize the session.",
+                  "source": "system"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/test/report": {
+      "get": {
+        "operationId": "testReport",
+        "tags": [
+          "course-testing"
+        ],
+        "summary": "Code coverage measured for a session (course cross-team testing interface)",
+        "description": "Returns the code coverage measured for this session's /process requests since setup. Reading it does not change it and does not run any project operation. Setup completes synchronously, so 409 (preparation in progress) is never returned by systems that follow this spec.\n",
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Coverage measured so far for this session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SystemReport"
+                },
+                "examples": {
+                  "measured": {
+                    "value": {
+                      "session_id": "6b1f9a52-3c0e-4f43-9d6e-2a7c1b8e4d10",
+                      "coverage": {
+                        "code": {
+                          "covered": 103,
+                          "total": 374,
+                          "basis": "Source lines executed while handling this session's POST /process requests since setup"
+                        }
+                      }
+                    }
+                  },
+                  "unavailable": {
+                    "value": {
+                      "session_id": "6b1f9a52-3c0e-4f43-9d6e-2a7c1b8e4d10",
+                      "coverage": {
+                        "code": {
+                          "covered": null,
+                          "total": null,
+                          "basis": "Source lines; target instrumentation unavailable"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/TestBadRequest"
+          },
+          "404": {
+            "description": "Unknown session ID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TestError"
+                },
+                "example": {
+                  "message": "Unknown session never-created.",
+                  "source": "system"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "responses": {
+      "TestBadRequest": {
+        "description": "Invalid request to a course test endpoint",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/TestError"
+            },
+            "example": {
+              "message": "Invalid request: session_id is required",
+              "source": "system"
+            }
+          }
+        }
+      },
+      "MissingFile": {
+        "description": "No file was attached to the request (REQ-02)",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            },
+            "example": {
+              "status": "error",
+              "error_code": "MISSING_FILE",
+              "message": "Request must include a PDF in the 'file' field."
+            }
+          }
+        }
+      },
+      "FileTooLarge": {
+        "description": "File exceeds 20,971,520 bytes (REQ-15)",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            },
+            "example": {
+              "status": "error",
+              "error_code": "FILE_TOO_LARGE",
+              "message": "File exceeds the 20 MB project limit."
+            }
+          }
+        }
+      },
+      "InvalidFileType": {
+        "description": "File is not a PDF (REQ-02)",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            },
+            "example": {
+              "status": "error",
+              "error_code": "INVALID_FILE_TYPE",
+              "message": "Input must be a PDF file."
+            }
+          }
+        }
+      },
+      "UnprocessablePdf": {
+        "description": "File is a PDF but cannot be processed because it is corrupted, unreadable, encrypted, or password-protected (REQ-02)\n",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            },
+            "example": {
+              "status": "error",
+              "error_code": "PASSWORD_PROTECTED_PDF",
+              "message": "PDF is password-protected and cannot be opened."
+            }
+          }
+        }
+      },
+      "ProcessingError": {
+        "description": "Processing failed after the file was accepted. Returned as an explicit error instead of an unhandled crash (REQ-16)\n",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            },
+            "example": {
+              "status": "error",
+              "error_code": "PROCESSING_ERROR",
+              "message": "Evaluation could not be completed for this file."
+            }
+          }
+        }
+      },
+      "ExternalServiceUnavailable": {
+        "description": "A required external service was unavailable. Reported separately so it is not counted as a test failure of the implementation\n",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            },
+            "example": {
+              "status": "error",
+              "error_code": "EXTERNAL_SERVICE_UNAVAILABLE",
+              "message": "A required external service is unavailable; retry later."
+            }
+          }
+        }
+      }
+    },
+    "schemas": {
+      "CheckId": {
+        "type": "string",
+        "enum": [
+          "CHK-NONTEXT",
+          "CHK-STRUCTURE",
+          "CHK-SENSORY",
+          "CHK-COLOR",
+          "CHK-TITLE",
+          "CHK-LINK",
+          "CHK-HEADINGS",
+          "CHK-LANG"
+        ]
+      },
+      "Health": {
+        "type": "object",
+        "required": [
+          "status",
+          "spec_version"
+        ],
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "ok"
+            ]
+          },
+          "spec_version": {
+            "type": "string"
+          }
+        }
+      },
+      "Check": {
+        "type": "object",
+        "required": [
+          "check_id",
+          "name",
+          "wcag_criterion",
+          "wcag_level",
+          "classification"
+        ],
+        "properties": {
+          "check_id": {
+            "$ref": "#/components/schemas/CheckId"
+          },
+          "name": {
+            "type": "string"
+          },
+          "wcag_criterion": {
+            "type": "string"
+          },
+          "wcag_level": {
+            "type": "string",
+            "enum": [
+              "A",
+              "AA"
+            ]
+          },
+          "classification": {
+            "type": "string",
+            "enum": [
+              "auto_fixable",
+              "human_review"
+            ]
+          }
+        }
+      },
+      "CheckList": {
+        "type": "object",
+        "required": [
+          "checks"
+        ],
+        "properties": {
+          "checks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Check"
+            }
+          }
+        }
+      },
+      "Error": {
+        "type": "object",
+        "required": [
+          "status",
+          "error_code",
+          "message"
+        ],
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "error"
+            ]
+          },
+          "error_code": {
+            "type": "string",
+            "enum": [
+              "MISSING_FILE",
+              "INVALID_FILE_TYPE",
+              "FILE_TOO_LARGE",
+              "CORRUPTED_PDF",
+              "UNREADABLE_PDF",
+              "ENCRYPTED_PDF",
+              "PASSWORD_PROTECTED_PDF",
+              "PROCESSING_ERROR",
+              "EXTERNAL_SERVICE_UNAVAILABLE"
+            ]
+          },
+          "message": {
+            "type": "string"
+          }
+        }
+      },
+      "Location": {
+        "type": "object",
+        "required": [
+          "description"
+        ],
+        "properties": {
+          "page": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "object_ref": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "description": {
+            "type": "string"
+          }
+        }
+      },
+      "Finding": {
+        "type": "object",
+        "required": [
+          "finding_id",
+          "check_id",
+          "issue_type",
+          "wcag_criterion",
+          "wcag_level",
+          "location",
+          "evaluation_result",
+          "classification",
+          "status"
+        ],
+        "properties": {
+          "finding_id": {
+            "type": "string"
+          },
+          "check_id": {
+            "$ref": "#/components/schemas/CheckId"
+          },
+          "issue_type": {
+            "type": "string"
+          },
+          "wcag_criterion": {
+            "type": "string"
+          },
+          "wcag_level": {
+            "type": "string",
+            "enum": [
+              "A",
+              "AA"
+            ]
+          },
+          "location": {
+            "$ref": "#/components/schemas/Location"
+          },
+          "evaluation_result": {
+            "type": "string",
+            "enum": [
+              "fail",
+              "needs_review"
+            ]
+          },
+          "classification": {
+            "type": "string",
+            "enum": [
+              "auto_fixable",
+              "human_review"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "fixed",
+              "repair_failed",
+              "needs_human_review"
+            ]
+          },
+          "fix_description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "Repair": {
+        "type": "object",
+        "required": [
+          "repair_id",
+          "finding_id",
+          "action",
+          "validation_result"
+        ],
+        "properties": {
+          "repair_id": {
+            "type": "string"
+          },
+          "finding_id": {
+            "type": "string"
+          },
+          "action": {
+            "type": "string"
+          },
+          "validation_result": {
+            "type": "string",
+            "enum": [
+              "passed",
+              "failed"
+            ]
+          }
+        }
+      },
+      "InputFile": {
+        "type": "object",
+        "required": [
+          "file_name",
+          "sha256",
+          "size_bytes"
+        ],
+        "properties": {
+          "file_name": {
+            "type": "string"
+          },
+          "sha256": {
+            "type": "string"
+          },
+          "size_bytes": {
+            "type": "integer",
+            "maximum": 20971520
+          }
+        }
+      },
+      "OutputFile": {
+        "type": "object",
+        "required": [
+          "file_name",
+          "media_type",
+          "sha256",
+          "content_base64"
+        ],
+        "properties": {
+          "file_name": {
+            "type": "string"
+          },
+          "media_type": {
+            "type": "string",
+            "enum": [
+              "application/pdf"
+            ]
+          },
+          "sha256": {
+            "type": "string"
+          },
+          "modified": {
+            "type": "boolean"
+          },
+          "content_base64": {
+            "type": "string",
+            "format": "byte"
+          }
+        }
+      },
+      "Summary": {
+        "type": "object",
+        "required": [
+          "total_issues",
+          "fixed_count",
+          "human_review_count"
+        ],
+        "properties": {
+          "total_issues": {
+            "type": "integer"
+          },
+          "fixed_count": {
+            "type": "integer"
+          },
+          "human_review_count": {
+            "type": "integer"
+          }
+        }
+      },
+      "EvaluationResult": {
+        "type": "object",
+        "required": [
+          "evaluation_id",
+          "status",
+          "input",
+          "outcome",
+          "checks_performed",
+          "findings",
+          "repairs",
+          "new_issues_after_repair",
+          "human_review_items",
+          "summary",
+          "limitations",
+          "compliance_statement",
+          "output_pdf",
+          "report_pdf"
+        ],
+        "properties": {
+          "evaluation_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "completed"
+            ]
+          },
+          "input": {
+            "$ref": "#/components/schemas/InputFile"
+          },
+          "outcome": {
+            "type": "string",
+            "enum": [
+              "completed_with_repairs",
+              "completed_no_repairs"
+            ]
+          },
+          "checks_performed": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CheckId"
+            }
+          },
+          "findings": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Finding"
+            }
+          },
+          "repairs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Repair"
+            }
+          },
+          "new_issues_after_repair": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Finding"
+            }
+          },
+          "human_review_items": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "summary": {
+            "$ref": "#/components/schemas/Summary"
+          },
+          "limitations": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "compliance_statement": {
+            "type": "string",
+            "enum": [
+              "This report does not certify ADA Title II or WCAG 2.1 conformance."
+            ]
+          },
+          "output_pdf": {
+            "$ref": "#/components/schemas/OutputFile"
+          },
+          "report_pdf": {
+            "$ref": "#/components/schemas/OutputFile"
+          }
+        }
+      },
+      "SetupRequest": {
+        "type": "object",
+        "required": [
+          "session_id"
+        ],
+        "properties": {
+          "session_id": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Unique ID chosen by the tester (or staff), e.g. a UUID. Never reused."
+          },
+          "setup": {
+            "type": "object",
+            "description": "Pod-defined starting data. This pod needs none, so send {}."
+          }
+        }
+      },
+      "SessionRef": {
+        "type": "object",
+        "required": [
+          "session_id"
+        ],
+        "properties": {
+          "session_id": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      },
+      "CodeCoverage": {
+        "type": "object",
+        "required": [
+          "covered",
+          "total",
+          "basis"
+        ],
+        "description": "Nonnegative integer counts with covered <= total. If measurement is unavailable, both counts are null (never 0) and basis explains why.\n",
+        "properties": {
+          "covered": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "total": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "basis": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      },
+      "SystemReport": {
+        "type": "object",
+        "required": [
+          "session_id",
+          "coverage"
+        ],
+        "properties": {
+          "session_id": {
+            "type": "string"
+          },
+          "coverage": {
+            "type": "object",
+            "required": [
+              "code"
+            ],
+            "properties": {
+              "code": {
+                "$ref": "#/components/schemas/CodeCoverage"
+              }
+            }
+          }
+        }
+      },
+      "TestError": {
+        "type": "object",
+        "required": [
+          "message",
+          "source"
+        ],
+        "properties": {
+          "message": {
+            "type": "string",
+            "minLength": 1
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "tester",
+              "system",
+              "communication",
+              "unknown"
+            ]
+          }
+        }
+      }
+    }
+  }
+}

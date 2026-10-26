@@ -7,6 +7,8 @@ from pathlib import Path
 from zipfile import ZipFile, BadZipFile
 from urllib.error import URLError
 from transport import request
+import os
+from jsonschema import Draft7Validator, FormatChecker
 
 ROOT = Path(__file__).resolve().parent
 CASES = [('T-01','BiggerThan20MB.pdf'), ('T-02','goodAccessible.pdf'),
@@ -47,7 +49,7 @@ def compare(actual, expected, filename, original):
                 require(hashlib.sha256(content).hexdigest() == item['sha256'], f'{key} SHA-256 differs.')
 
 
-def run_case(test_id, filename, target, session_id):
+def run_zip_case(test_id, filename, target, session_id):
     # Local fixture failures abort the suite, rather than blaming the target.
     original = (ROOT/'fixtures'/'inputs'/filename).read_bytes()
     expected = (ROOT/'fixtures'/'expected'/(Path(filename).stem+'_review.zip')).read_bytes()
@@ -79,3 +81,62 @@ def coverage(results):
             'basis':'Pod v0.3.0 request-based component exercise rules. Exercised: '+(', '.join(components) or 'none')+'. Preliminary validation/output tests only; accessibility detection and repair are not tested.'},
         'system': {'covered':None, 'total':None,
             'basis':'AC-01 through AC-10 are listed in the pod API but their definitions are unavailable; no acceptance-criterion mapping is claimed.'}}
+
+
+SPEC = json.loads((ROOT/'shared-openapi.json').read_text())
+
+
+def validate(schema_name, value):
+    schema = {'$ref': '#/components/schemas/'+schema_name, 'components': SPEC['components']}
+    problems = sorted(Draft7Validator(schema, format_checker=FormatChecker()).iter_errors(value), key=lambda e:str(e.path))
+    require(not problems, 'Shared schema mismatch: '+('; '.join(f"{list(e.path)}: {e.message}" for e in problems[:3])))
+
+
+def validate_success(result, filename, original):
+    validate('EvaluationResult',result)
+    require(result['input']['file_name']==filename, 'Input filename differs.')
+    require(result['input']['size_bytes']==len(original), 'Input byte count differs.')
+    require(result['input']['sha256']==hashlib.sha256(original).hexdigest(), 'Input digest differs.')
+    for key in ('output_pdf','report_pdf'):
+        item=result[key]
+        decoded=base64.b64decode(item['content_base64'],validate=True)
+        require(decoded.startswith(b'%PDF-'), f'{key} is not PDF content.')
+        require(hashlib.sha256(decoded).hexdigest()==item['sha256'], f'{key} digest differs.')
+        if key=='output_pdf' and item.get('modified') is False:
+            require(decoded==original, 'Output marked unmodified differs from original.')
+    performed=set(result['checks_performed'])
+    for check in SPEC['components']['schemas']['CheckId']['enum']:
+        if check not in performed:
+            require(any(check in text for text in result['limitations']), f'{check} was not performed and is not named in limitations.')
+
+
+def run_case(test_id, filename, target, session_id):
+    mode=os.environ.get('TESTER_MODE','contract')
+    if mode=='zip-baseline':return run_zip_case(test_id,filename,target,session_id)
+    if mode!='contract':raise ValueError('TESTER_MODE must be contract or zip-baseline')
+    original=(ROOT/'fixtures'/'inputs'/filename).read_bytes()
+    expected=(ROOT/'fixtures'/'expected'/(Path(filename).stem+'_review.zip')).read_bytes()
+    with ZipFile(BytesIO(expected)) as archive:
+        require(archive.read(filename)==original, 'Local reference does not match input fixture.')
+        baseline=json.loads(archive.read('report.json'))
+    code=baseline.get('error_code')
+    expected_status={'FILE_TOO_LARGE':413,'INVALID_FILE_TYPE':415,'PASSWORD_PROTECTED_PDF':422,'ENCRYPTED_PDF':422}.get(code,200)
+    try:
+        status,headers,body=request('POST',target+'/process',upload=(filename,original),session_id=session_id,accept='application/json')
+    except (URLError,OSError,TimeoutError) as exc:
+        return dict(test_id=test_id,outcome='error',source='communication',message=f'{filename}: no evaluable response: {exc}')
+    if status>=500:
+        return dict(test_id=test_id,outcome='error',source='system',message=f'{filename}: target returned HTTP {status}.')
+    try:
+        require(status==expected_status,f'Expected HTTP {expected_status}; received {status}.')
+        media=next((v for k,v in headers.items() if k.lower()=='content-type'),'')
+        require('application/json' in media.lower(),f'Expected application/json; received {media}.')
+        result=json.loads(body)
+        if code:
+            validate('Error',result)
+            require(result['error_code']==code,f"Expected {code}; received {result['error_code']}.")
+            require(bool(result['message'].strip()),'Error message is empty.')
+        else:validate_success(result,filename,original)
+    except (AssertionError,ValueError,KeyError,TypeError) as exc:
+        return dict(test_id=test_id,outcome='fail',message=f'{filename}: {exc}')
+    return dict(test_id=test_id,outcome='pass',message=f'{filename}: shared v0.3.0 HTTP status, JSON schema and input/output integrity verified.')

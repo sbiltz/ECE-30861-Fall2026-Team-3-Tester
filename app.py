@@ -1,5 +1,6 @@
 """Course tester API. One process owns all in-memory sessions."""
 from copy import deepcopy
+from pathlib import Path
 import json
 import logging
 from threading import Lock
@@ -8,7 +9,7 @@ from urllib.error import URLError
 from uuid import uuid4
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, FileResponse
 from pydantic import BaseModel, StrictStr, field_validator
 from starlette.exceptions import HTTPException
 from transport import request
@@ -142,3 +143,8 @@ def report(session_id: str):
         if session is None: return error('Unknown session.', 404)
         if session['state'] != 'ended': return error('Suite has not ended.', 409)
         return deepcopy(session['report'])
+
+
+@app.get("/", include_in_schema=False)
+def homepage():
+    return FileResponse(Path(__file__).resolve().parent / "index.html", headers={"Cache-Control": "no-store"})

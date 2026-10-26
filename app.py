@@ -9,13 +9,16 @@ from urllib.error import URLError
 from uuid import uuid4
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
+from fastapi.openapi.docs import get_swagger_ui_html
+from fastapi.openapi.utils import get_openapi
+from models import SessionRef, TestError, SuiteReport
 from fastapi.responses import JSONResponse, FileResponse
 from pydantic import BaseModel, StrictStr, field_validator
 from starlette.exceptions import HTTPException
 from transport import request
 from suite import CASES, run_case, coverage
 
-app = FastAPI(title='Team 3 preliminary PDF tester', version='1.0.0', docs_url=None, redoc_url=None, openapi_url=None)
+app = FastAPI(title='Team 3 preliminary PDF tester', version='1.0.0', docs_url='/docs', redoc_url=None, openapi_url='/openapi.json', description='Run the Team 3 preliminary PDF suite against a system implementing the shared pod API v0.3.0. Prepare a session, run it once, and retrieve its stored report. The browser dashboard is at /; this API explorer is at /docs and /tester.')
 sessions = {}
 lock = Lock()
 
@@ -66,7 +69,7 @@ async def unexpected(request, exc):
     return error('Tester operation failed.', 500)
 
 
-@app.post('/test/setup', status_code=201)
+@app.post('/test/setup', status_code=201, response_model=SessionRef, summary='Prepare a target system and create a session', responses={400: {'model': TestError}, 409: {'model': TestError}, 500: {'model': TestError}})
 def setup(body: Setup):
     sid = str(uuid4())
     try:
@@ -100,7 +103,7 @@ def read_code(target, sid):
         return {'covered':None, 'total':None, 'basis':f'Target code coverage unavailable: {exc}'}
 
 
-@app.post('/test/run')
+@app.post('/test/run', response_model=SuiteReport, response_model_exclude_unset=True, summary='Run the six tests once and return the complete report', responses={400: {'model': TestError}, 404: {'model': TestError}, 409: {'model': TestError}, 500: {'model': TestError}})
 def run(body: Run):
     with lock:
         session = sessions.get(body.session_id)
@@ -135,7 +138,7 @@ def run(body: Run):
     return report
 
 
-@app.get('/test/report')
+@app.get('/test/report', response_model=SuiteReport, response_model_exclude_unset=True, summary='Retrieve the saved report without rerunning tests', responses={400: {'model': TestError}, 404: {'model': TestError}, 409: {'model': TestError}})
 def report(session_id: str):
     if not session_id.strip(): return error('session_id must not be blank.')
     with lock:
@@ -148,3 +151,28 @@ def report(session_id: str):
 @app.get("/", include_in_schema=False)
 def homepage():
     return FileResponse(Path(__file__).resolve().parent / "index.html", headers={"Cache-Control": "no-store"})
+
+
+@app.get('/tester', include_in_schema=False)
+@app.get('/tester/', include_in_schema=False)
+def api_explorer(request: Request):
+    prefix = request.scope.get('root_path', '').rstrip('/')
+    return get_swagger_ui_html(openapi_url=prefix + '/openapi.json', title='Team 3 Tester - API explorer')
+
+
+def course_openapi():
+    if app.openapi_schema is None:
+        schema = get_openapi(title=app.title, version=app.version,
+                             description=app.description, routes=app.routes)
+        # FastAPI's default 422 is replaced by the course-mandated 400 handler.
+        for path in schema['paths'].values():
+            for operation in path.values():
+                if isinstance(operation, dict):
+                    operation.get('responses', {}).pop('422', None)
+        schema['components']['schemas']['Setup']['properties']['target_url']['example'] = 'http://127.0.0.1:8001'
+        schema['components']['schemas']['Run']['properties']['session_id']['description'] = 'Use the session_id returned by setup. One run per session.'
+        app.openapi_schema = schema
+    return app.openapi_schema
+
+
+app.openapi = course_openapi

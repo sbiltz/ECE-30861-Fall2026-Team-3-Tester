@@ -149,3 +149,24 @@ does not by itself provide a public Internet URL for the course registry.
 ```powershell
 .\.venv\Scripts\python.exe -B -m unittest discover -v
 ```
+
+
+## Interactive API explorer (like the example tester)
+
+Open http://127.0.0.1:8002/tester or http://127.0.0.1:8002/docs after
+starting the tester. These display Swagger UI for the same three course
+endpoints. The dashboard remains at http://127.0.0.1:8002/.
+
+1. Expand POST /test/setup, choose Try it out, enter the target system base
+   URL, and Execute. Copy the session_id from the 201 response.
+2. Expand POST /test/run, choose Try it out, paste the ID into session_id,
+   and Execute once. The 200 response contains all results and coverage.
+3. Expand GET /test/report and enter that ID to retrieve the saved report.
+   After a lost run response, use report retrieval instead of repeating run.
+
+The machine-readable tester description is at /openapi.json. It documents
+request/response schemas and the required 400/404/409/500 error formats.
+Setup completes before any tests run. Runs use a unique prepared session once;
+reports remain unchanged after completion. Null coverage means unavailable,
+not zero. Swagger UI assets load from a CDN, so the explorer requires Internet
+access; the dashboard uses local assets and does not require that CDN.

@@ -16,9 +16,9 @@ from fastapi.responses import JSONResponse, FileResponse
 from pydantic import BaseModel, StrictStr, field_validator
 from starlette.exceptions import HTTPException
 from transport import request
-from suite import CASES, run_case, coverage
+from suite import CASES, run_case, coverage, validate
 
-app = FastAPI(title='Team 3 preliminary PDF tester', version='1.0.0', docs_url='/docs', redoc_url=None, openapi_url='/openapi.json', description='Run the Team 3 preliminary PDF suite against a system implementing the shared pod API v0.3.0. Prepare a session, run it once, and retrieve its stored report. The browser dashboard is at /; this API explorer is at /docs and /tester.')
+app = FastAPI(title='Team 3 PDF accessibility tester', version='2.0.0', docs_url='/docs', redoc_url=None, openapi_url='/openapi.json', description='Run the Team 3 Phase 4 contract and detection suite against the shared pod API v0.4.0. Prepare a session, run it once, and retrieve its stored report. The browser dashboard is at /; this API explorer is at /docs and /tester.')
 sessions = {}
 lock = Lock()
 
@@ -82,6 +82,8 @@ def setup(body: Setup):
             return error('Target setup returned a malformed error.', status, 'system')
         if status != 201 or not isinstance(result, dict) or result.get('session_id') != sid:
             return error('Target setup must return 201 and the supplied session_id.', 500, 'system')
+        try: validate('SessionRef', result)
+        except AssertionError: return error('Target setup returned a malformed session reference.', 500, 'system')
     except (URLError, OSError, TimeoutError) as exc:
         return error(f'Target setup communication failed: {exc}', 500, 'communication')
     with lock:
@@ -94,6 +96,7 @@ def read_code(target, sid):
         status, _, raw = request('GET', target+'/test/report?'+urlencode({'session_id':sid}))
         result = json.loads(raw)
         if status != 200 or result['session_id'] != sid: raise ValueError('Unexpected system report status or session')
+        validate('SystemReport', result)
         code = result['coverage']['code']
         a,b = code['covered'], code['total']
         if not isinstance(code['basis'], str) or not code['basis'].strip(): raise ValueError('Empty basis')
@@ -103,7 +106,7 @@ def read_code(target, sid):
         return {'covered':None, 'total':None, 'basis':f'Target code coverage unavailable: {exc}'}
 
 
-@app.post('/test/run', response_model=SuiteReport, response_model_exclude_unset=True, summary='Run the six tests once and return the complete report', responses={400: {'model': TestError}, 404: {'model': TestError}, 409: {'model': TestError}, 500: {'model': TestError}})
+@app.post('/test/run', response_model=SuiteReport, response_model_exclude_unset=True, summary='Run the Phase 4 suite once and return the complete report', responses={400: {'model': TestError}, 404: {'model': TestError}, 409: {'model': TestError}, 500: {'model': TestError}})
 def run(body: Run):
     with lock:
         session = sessions.get(body.session_id)

@@ -1,24 +1,309 @@
-"""Regression comparisons against the six supplied preliminary ZIP outputs."""
+"""Pod v0.4.0 contract and Phase 4 detection tests; no project-call retries."""
 import base64
+import copy
 import hashlib
 import json
-from io import BytesIO
-from pathlib import Path
-from zipfile import ZipFile, BadZipFile
-from urllib.error import URLError
-from transport import request
 import os
+from io import BytesIO
+from pathlib import Path, PurePosixPath
+from urllib.error import URLError
+from urllib.parse import urlencode
+from uuid import uuid4
+from zipfile import ZipFile, BadZipFile
+from http.client import HTTPException
+
 from jsonschema import Draft7Validator, FormatChecker
+from ruamel.yaml import YAML
+from transport import request
 
 ROOT = Path(__file__).resolve().parent
-CASES = [('T-01','BiggerThan20MB.pdf'), ('T-02','goodAccessible.pdf'),
-         ('T-03','NonPDF.docx'), ('T-04','passwordprotected.pdf'),
-         ('T-05','encrypted.pdf'), ('T-06','accessibilityIssues.pdf')]
+SPEC = YAML(typ='safe', pure=True).load((ROOT/'shared-openapi.yaml').read_text(encoding='utf-8'))
+VERSION = SPEC['info']['version']
+CATALOG = {item['check_id']: item for item in SPEC['paths']['/checks']['get']['responses']['200']['content']['application/json']['example']['checks']}
+LEGACY_CASES = [('T-01','BiggerThan20MB.pdf'), ('T-02','goodAccessible.pdf'),
+                ('T-03','NonPDF.docx'), ('T-04','passwordprotected.pdf'),
+                ('T-05','encrypted.pdf'), ('T-06','accessibilityIssues.pdf')]
+CASES = LEGACY_CASES + [
+    ('T-07','Health and specification version'), ('T-08','Agreed check catalog'),
+    ('T-09','Missing upload'), ('T-10','Corrupted PDF'), ('T-11','Exact size boundary'),
+    ('T-12','All eight checks performed'), ('T-13','Known title/language findings'),
+    ('T-14','Known human-review finding'), ('T-15','Shared ZIP output'),
+    ('T-16','Invalid output option'), ('T-17','ZIP validation error remains JSON'),
+    ('T-18','Explicit JSON output'), ('T-19','Duplicate system session'),
+    ('T-20','Unknown system report session'), ('T-21','Phase 5 repairs and revalidation')]
+CASE_COMPONENTS = {
+    'T-01': {'COMP-VALIDATION'}, 'T-02': {'COMP-REPORT'},
+    'T-03': {'COMP-VALIDATION'}, 'T-04': {'COMP-VALIDATION'}, 'T-05': {'COMP-VALIDATION'},
+    'T-06': {'COMP-REPORT'}, 'T-07': {'COMP-HEALTH'}, 'T-08': {'COMP-CATALOG'},
+    'T-09': {'COMP-VALIDATION'}, 'T-10': {'COMP-VALIDATION'}, 'T-11': {'COMP-REPORT'},
+    'T-12': {'COMP-DETECTION'}, 'T-13': {'COMP-DETECTION','COMP-CLASSIFICATION'},
+    'T-14': {'COMP-DETECTION','COMP-CLASSIFICATION'}, 'T-15': {'COMP-REPORT'},
+    'T-16': {'COMP-VALIDATION'}, 'T-17': {'COMP-VALIDATION'}, 'T-18': {'COMP-REPORT'}}
 
 
 def require(condition, message):
     if not condition:
         raise AssertionError(message)
+
+
+def json_schema(value):
+    if isinstance(value, list): return [json_schema(item) for item in value]
+    if not isinstance(value, dict): return value
+    result = {key: json_schema(item) for key,item in value.items() if key != 'nullable'}
+    if value.get('nullable') and isinstance(result.get('type'),str):
+        result['type'] = [result['type'],'null']
+    return result
+
+
+SCHEMAS = json_schema(SPEC['components'])
+
+
+def validate(schema_name, value):
+    schema = {'$ref':'#/components/schemas/'+schema_name,'components':SCHEMAS}
+    problems = sorted(Draft7Validator(schema,format_checker=FormatChecker()).iter_errors(value),key=lambda e:str(e.path))
+    require(not problems,'Shared schema mismatch: '+'; '.join(f'{list(e.path)}: {e.message}' for e in problems[:3]))
+
+
+def validate_success(result, filename, original, *, embedded=True):
+    checked = copy.deepcopy(result)
+    if not embedded:
+        # The shared ZIP deliberately omits Base64; validate the remaining schema
+        # with temporary values, then validate the actual archive bytes separately.
+        for key in ('output_pdf','report_pdf'):
+            require('content_base64' not in checked.get(key,{}),f'ZIP result.json must omit {key}.content_base64.')
+            checked[key]['content_base64'] = ''
+    validate('EvaluationResult',checked)
+    require(result['input']['file_name']==filename,'Input filename differs.')
+    require(result['input']['size_bytes']==len(original),'Input byte count differs.')
+    require(result['input']['sha256']==hashlib.sha256(original).hexdigest(),'Input digest differs.')
+    if embedded:
+        for key in ('output_pdf','report_pdf'):
+            decoded = base64.b64decode(result[key]['content_base64'],validate=True)
+            validate_pdf_bytes(key,result[key],decoded,original,result['outcome'])
+    performed = result['checks_performed']
+    require(len(performed)==len(set(performed)),'checks_performed contains duplicates.')
+    for check in CATALOG:
+        if check not in performed:
+            require(any(check in text for text in result['limitations']),f'{check} was not performed and is not named in limitations.')
+    findings = result['findings']
+    ids = [f['finding_id'] for f in findings]
+    require(len(ids)==len(set(ids)),'Finding IDs are not unique.')
+    by_id = {f['finding_id']:f for f in findings}
+    reviews = result['human_review_items']
+    require(len(reviews)==len(set(reviews)) and set(reviews)<=set(ids),'human_review_items contains duplicates or unknown IDs.')
+    repairs = result['repairs']
+    repair_ids = [r['repair_id'] for r in repairs]
+    require(len(repair_ids)==len(set(repair_ids)),'Repair IDs are not unique.')
+    for repair in repairs:
+        require(repair['finding_id'] in by_id,'Repair refers to an unknown finding.')
+        finding = by_id[repair['finding_id']]
+        require(finding['classification']=='auto_fixable','Human-review finding was automatically repaired.')
+        expected = 'fixed' if repair['validation_result']=='passed' else 'repair_failed'
+        require(finding['status']==expected,'Finding status does not agree with repair validation.')
+    for finding in findings + result['new_issues_after_repair']:
+        definition = CATALOG[finding['check_id']]
+        require(finding['check_id'] in performed,f"Finding refers to unperformed check {finding['check_id']}.")
+        require(all(finding[key]==definition[key] for key in ('wcag_criterion','wcag_level','classification')),
+                f"WCAG/classification mapping differs for {finding['check_id']}.")
+        if finding['classification']=='human_review':
+            require(finding['status']=='needs_human_review','Human-review finding must remain needs_human_review.')
+            if finding in findings:
+                require(finding['finding_id'] in reviews,'Human-review finding is missing from human_review_items.')
+        else:
+            require(finding['status'] in ('detected','fixed','repair_failed'),
+                    'v0.4.0 auto_fixable findings use detected when unrepaired, or fixed/repair_failed after repair.')
+        linked = [r for r in repairs if r['finding_id']==finding['finding_id']]
+        if finding['status']=='detected':
+            require(not linked,'A detected finding must not have a repair attempt.')
+        if finding['status'] in ('fixed','repair_failed'):
+            require(bool(linked),'Repaired finding has no corresponding repair record.')
+    summary = result['summary']
+    require(summary['total_issues']==len(findings),'summary.total_issues does not match findings.')
+    require(summary['fixed_count']==sum(f['status']=='fixed' for f in findings),'summary.fixed_count is inconsistent.')
+    require(summary['human_review_count']==len(reviews),'summary.human_review_count is inconsistent.')
+    require(result['compliance_statement']=='This report does not certify ADA Title II or WCAG 2.1 conformance.',
+            'Missing fixed non-certification statement.')
+
+
+def validate_pdf_bytes(key,item,decoded,original,outcome):
+    require(decoded.startswith(b'%PDF-'),f'{key} is not PDF content.')
+    require(hashlib.sha256(decoded).hexdigest()==item['sha256'],f'{key} digest differs.')
+    from pypdf import PdfReader
+    try:
+        reader = PdfReader(BytesIO(decoded),strict=False)
+        require(not reader.is_encrypted and len(reader.pages)>0,f'{key} is unreadable, encrypted or empty.')
+    except Exception as exc:
+        raise AssertionError(f'{key} is not a readable PDF: {exc}') from exc
+    if key=='output_pdf' and (item.get('modified') is False or outcome=='completed_no_repairs'):
+        require(decoded==original,'Unrepaired/unmodified output differs from original.')
+
+
+def validate_zip(body,headers,filename,original):
+    disposition = header(headers,'content-disposition')
+    require('attachment' in disposition.lower() and ('filename=' in disposition.lower() or 'filename*=' in disposition.lower()),'ZIP is missing attachment filename.')
+    with ZipFile(BytesIO(body)) as archive:
+        names = archive.namelist()
+        require(len(names)==len(set(names)),'ZIP has duplicate members.')
+        require(archive.testzip() is None,'ZIP checksum failed.')
+        require('result.json' in names and 'original.pdf' in names,'ZIP must contain result.json and original.pdf.')
+        require(archive.read('original.pdf')==original,'ZIP original differs from submitted PDF.')
+        result = json.loads(archive.read('result.json'))
+        validate_success(result,filename,original,embedded=False)
+        expected = {'original.pdf','result.json'}
+        for key in ('output_pdf','report_pdf'):
+            item=result[key]
+            name=item['file_name']
+            require(PurePosixPath(name).name==name and '\\' not in name and name not in expected,'Invalid/colliding ZIP output filename.')
+            expected.add(name)
+            validate_pdf_bytes(key,item,archive.read(name),original,result['outcome'])
+        require(set(names)==expected,f'Unexpected ZIP members: {names}.')
+        return result
+
+
+def header(headers,name):
+    return next((v for k,v in headers.items() if k.lower()==name),'')
+
+
+def _json_response(status,headers,body,expected,schema):
+    require(status==expected,f'Expected HTTP {expected}; received {status}.')
+    require(header(headers,'content-type').split(';')[0].strip().lower()=='application/json',
+            f"Expected application/json; received {header(headers,'content-type')}.")
+    result=json.loads(body)
+    validate(schema,result)
+    return result
+
+
+class FixtureError(Exception):
+    pass
+
+
+def _input(filename):
+    try:
+        return (ROOT/'fixtures'/'inputs'/filename).read_bytes()
+    except OSError as exc:
+        raise FixtureError(f'Local fixture {filename} is unavailable: {exc}') from exc
+
+
+def _execute(test_id,target,sid):
+    if test_id=='T-07':
+        response=request('GET',target+'/health')
+        result=_json_response(*response,200,'Health')
+        require(result['spec_version']==VERSION,f"Expected shared spec_version {VERSION}; received {result['spec_version']}.")
+        return 'Health and shared specification version verified.'
+    if test_id=='T-08':
+        result=_json_response(*request('GET',target+'/checks'),200,'CheckList')
+        ids=[item['check_id'] for item in result['checks']]
+        require(len(ids)==len(set(ids)) and set(ids)==set(CATALOG),'Check catalog must list all eight agreed checks exactly once.')
+        for item in result['checks']:
+            require(all(item[key]==CATALOG[item['check_id']][key] for key in ('wcag_criterion','wcag_level','classification')),
+                    f"Catalog mapping differs for {item['check_id']}.")
+        return 'All eight catalog definitions and classifications verified.'
+    if test_id=='T-19':
+        result=_json_response(*request('POST',target+'/test/setup',payload={'session_id':sid,'setup':{}},timeout=10),409,'TestError')
+        require(result['source']=='system','Duplicate-session error source must identify the system.')
+        return 'Duplicate system session correctly rejected.'
+    if test_id=='T-20':
+        _json_response(*request('GET',target+'/test/report?'+urlencode({'session_id':str(uuid4())})),404,'TestError')
+        return 'Unknown system report session correctly rejected.'
+    kwargs={'session_id':sid,'accept':'application/json'}
+    error_code=None
+    if test_id in dict(LEGACY_CASES):
+        filename=dict(LEGACY_CASES)[test_id]
+        original=_input(filename)
+        error_code={'T-01':'FILE_TOO_LARGE','T-03':'INVALID_FILE_TYPE','T-04':'PASSWORD_PROTECTED_PDF','T-05':'ENCRYPTED_PDF'}.get(test_id)
+        kwargs['upload']=(filename,original)
+    elif test_id=='T-09':
+        kwargs['form_fields']={}
+        error_code='MISSING_FILE'
+    elif test_id=='T-10':
+        filename,original='corrupted.pdf',b'%PDF-1.7\nintentionally truncated\n'
+        kwargs['upload']=(filename,original)
+        error_code=('CORRUPTED_PDF','UNREADABLE_PDF')
+    elif test_id=='T-11':
+        original=_input('goodAccessible.pdf')
+        limit=SPEC['x-limits']['max_file_size_bytes']
+        position=original.rfind(b'%%EOF')
+        require(position>=0 and len(original)<=limit,'Invalid local size-boundary fixture.')
+        original=original[:position]+b' '*(limit-len(original))+original[position:]
+        filename='exactly20MB.pdf'
+        kwargs['upload']=(filename,original)
+    else:
+        filename='phase4_human_review.pdf' if test_id=='T-14' else 'accessibilityIssues.pdf' if test_id in ('T-12','T-13') else 'NonPDF.docx' if test_id=='T-17' else 'goodAccessible.pdf'
+        original=_input(filename)
+        kwargs['upload']=(filename,original)
+        if test_id in ('T-15','T-17'):
+            kwargs.update(form_fields={'output':'zip'},accept='application/zip')
+        if test_id=='T-16':
+            kwargs['form_fields']={'output':'invalid'}
+            error_code='INVALID_REQUEST'
+        if test_id=='T-17': error_code='INVALID_FILE_TYPE'
+        if test_id=='T-18': kwargs['form_fields']={'output':'json'}
+    response=request('POST',target+'/process',**kwargs)
+    status,headers,body=response
+    if status>=500:
+        result=_json_response(*response,status,'Error')
+        raise TargetUnavailable(f"HTTP {status}: {result['error_code']}: {result['message']}")
+    if error_code:
+        errors=error_code if isinstance(error_code,tuple) else (error_code,)
+        expected={'FILE_TOO_LARGE':413,'INVALID_FILE_TYPE':415,'PASSWORD_PROTECTED_PDF':422,'ENCRYPTED_PDF':422,'CORRUPTED_PDF':422,'UNREADABLE_PDF':422,'MISSING_FILE':400,'INVALID_REQUEST':400}[errors[0]]
+        result=_json_response(*response,expected,'Error')
+        require(result['error_code'] in errors,f"Expected error {errors}; received {result['error_code']}.")
+        require(result['message'].strip(),'Error explanation is blank.')
+        return f'HTTP {expected}, {result["error_code"]}, shared error schema verified.'
+    if test_id=='T-15':
+        require(status==200,f'Expected ZIP HTTP 200; received {status}.')
+        require(header(headers,'content-type').split(';')[0].strip().lower()=='application/zip','output=zip must return application/zip.')
+        validate_zip(body,headers,filename,original)
+        return 'Shared output=zip archive, JSON manifest, original and PDF hashes verified.'
+    result=_json_response(*response,200,'EvaluationResult')
+    if test_id=='T-12':
+        missing=set(CATALOG)-set(result['checks_performed'])
+        require(not missing,f'Expected all eight Phase 4 checks performed; missing {sorted(missing)}.')
+    validate_success(result,filename,original)
+    if test_id=='T-13':
+        for check in ('CHK-TITLE','CHK-LANG'):
+            # issue_type is intentionally free text in the shared contract.
+            require(any(f['check_id']==check and f['evaluation_result']=='fail' for f in result['findings']),f'Missing predetermined missing-metadata finding for {check}.')
+    if test_id=='T-14':
+        matches=[f for f in result['findings'] if f['check_id']=='CHK-NONTEXT' and f['classification']=='human_review']
+        require(bool(matches),'Predetermined generic Figure alternative was not flagged for human review.')
+        require(all(f['status']=='needs_human_review' and f['finding_id'] in result['human_review_items'] for f in matches),'Human-review findings were resolved or omitted.')
+    return f'Shared v{VERSION} status/schema/integrity verified'+('; full Phase 4 check execution verified.' if test_id=='T-12' else '; predetermined findings and classifications verified.' if test_id in ('T-13','T-14') else '.')
+
+
+class TargetUnavailable(Exception): pass
+
+
+def run_case(test_id,filename,target,session_id):
+    mode=os.getenv('TESTER_MODE','contract')
+    if mode=='zip-baseline':
+        if test_id not in dict(LEGACY_CASES):
+            return dict(test_id=test_id,outcome='skip',message='Legacy ZIP-baseline mode only runs the six preliminary cases.')
+        return run_zip_case(test_id,filename,target,session_id)
+    if mode!='contract': raise ValueError('TESTER_MODE must be contract or zip-baseline')
+    if test_id=='T-21':
+        return dict(test_id=test_id,outcome='skip',message='Automatic repairs and post-repair validation are Phase 5; not claimed as exercised in this Phase 4 suite.')
+    try:
+        message=_execute(test_id,target,session_id)
+    except (URLError,OSError,TimeoutError,HTTPException) as exc:
+        return dict(test_id=test_id,outcome='error',source='communication',message=f'{filename}: no evaluable response: {exc}')
+    except TargetUnavailable as exc:
+        return dict(test_id=test_id,outcome='error',source='system',message=f'{filename}: {exc}')
+    except (AssertionError,ValueError,KeyError,TypeError,BadZipFile) as exc:
+        return dict(test_id=test_id,outcome='fail',message=f'{filename}: {exc}')
+    return dict(test_id=test_id,outcome='pass',message=f'{filename}: {message}')
+
+
+def coverage(results):
+    exercised=set()
+    for result in results:
+        if result['outcome'] in ('pass','fail') or result.get('source')=='system':
+            exercised.update(CASE_COMPONENTS.get(result['test_id'],set()))
+    components=SPEC['x-pod-testing']['components']['list']
+    return {'component':{'covered':len(exercised),'total':len(components),
+        'basis':f'Pod v{VERSION} request-based component exercise rules. Exercised: '+(', '.join(sorted(exercised)) or 'none')+'. Exercise is not correctness; Phase 5 repair/revalidation are not exercised.'},
+        'system':{'covered':None,'total':None,
+        'basis':'Shared contract lists AC-01 through AC-10 without definitions; the supplied standalone AC list uses AC-02 through AC-13. No agreed mapping is available, so no system-model coverage is claimed.'}}
 
 
 def compare(actual, expected, filename, original):
@@ -56,7 +341,7 @@ def run_zip_case(test_id, filename, target, session_id):
     with ZipFile(BytesIO(expected)) as reference:
         require(reference.read(filename) == original, f'Local expected ZIP does not match fixture {filename}.')
     try:
-        status, headers, body = request('POST', target+'/process', upload=(filename,original), session_id=session_id)
+        status, headers, body = request('POST', target+'/process', upload=(filename,original), session_id=session_id, accept='application/zip')
     except (URLError, OSError, TimeoutError) as exc:
         return dict(test_id=test_id, outcome='error', source='communication', message=f'{filename}: no evaluable response: {exc}')
     if status >= 500:
@@ -69,74 +354,3 @@ def run_zip_case(test_id, filename, target, session_id):
     except (AssertionError, BadZipFile, ValueError, KeyError, TypeError, RuntimeError) as exc:
         return dict(test_id=test_id, outcome='fail', message=f'{filename}: {exc}')
     return dict(test_id=test_id, outcome='pass', message=f'{filename}: ZIP members, report and file contents match expected output.')
-
-
-def coverage(results):
-    received = {r['test_id'] for r in results if r['outcome'] in ('pass','fail') or r.get('source') == 'system'}
-    components = []
-    if received & {'T-01','T-03','T-04','T-05'}: components.append('COMP-VALIDATION')
-    if received & {'T-02','T-06'}: components.append('COMP-REPORT')
-    return {
-        'component': {'covered':len(components), 'total':8,
-            'basis':'Pod v0.3.0 request-based component exercise rules. Exercised: '+(', '.join(components) or 'none')+'. Preliminary validation/output tests only; accessibility detection and repair are not tested.'},
-        'system': {'covered':None, 'total':None,
-            'basis':'AC-01 through AC-10 are listed in the pod API but their definitions are unavailable; no acceptance-criterion mapping is claimed.'}}
-
-
-SPEC = json.loads((ROOT/'shared-openapi.json').read_text())
-
-
-def validate(schema_name, value):
-    schema = {'$ref': '#/components/schemas/'+schema_name, 'components': SPEC['components']}
-    problems = sorted(Draft7Validator(schema, format_checker=FormatChecker()).iter_errors(value), key=lambda e:str(e.path))
-    require(not problems, 'Shared schema mismatch: '+('; '.join(f"{list(e.path)}: {e.message}" for e in problems[:3])))
-
-
-def validate_success(result, filename, original):
-    validate('EvaluationResult',result)
-    require(result['input']['file_name']==filename, 'Input filename differs.')
-    require(result['input']['size_bytes']==len(original), 'Input byte count differs.')
-    require(result['input']['sha256']==hashlib.sha256(original).hexdigest(), 'Input digest differs.')
-    for key in ('output_pdf','report_pdf'):
-        item=result[key]
-        decoded=base64.b64decode(item['content_base64'],validate=True)
-        require(decoded.startswith(b'%PDF-'), f'{key} is not PDF content.')
-        require(hashlib.sha256(decoded).hexdigest()==item['sha256'], f'{key} digest differs.')
-        if key=='output_pdf' and item.get('modified') is False:
-            require(decoded==original, 'Output marked unmodified differs from original.')
-    performed=set(result['checks_performed'])
-    for check in SPEC['components']['schemas']['CheckId']['enum']:
-        if check not in performed:
-            require(any(check in text for text in result['limitations']), f'{check} was not performed and is not named in limitations.')
-
-
-def run_case(test_id, filename, target, session_id):
-    mode=os.environ.get('TESTER_MODE','contract')
-    if mode=='zip-baseline':return run_zip_case(test_id,filename,target,session_id)
-    if mode!='contract':raise ValueError('TESTER_MODE must be contract or zip-baseline')
-    original=(ROOT/'fixtures'/'inputs'/filename).read_bytes()
-    expected=(ROOT/'fixtures'/'expected'/(Path(filename).stem+'_review.zip')).read_bytes()
-    with ZipFile(BytesIO(expected)) as archive:
-        require(archive.read(filename)==original, 'Local reference does not match input fixture.')
-        baseline=json.loads(archive.read('report.json'))
-    code=baseline.get('error_code')
-    expected_status={'FILE_TOO_LARGE':413,'INVALID_FILE_TYPE':415,'PASSWORD_PROTECTED_PDF':422,'ENCRYPTED_PDF':422}.get(code,200)
-    try:
-        status,headers,body=request('POST',target+'/process',upload=(filename,original),session_id=session_id,accept='application/json')
-    except (URLError,OSError,TimeoutError) as exc:
-        return dict(test_id=test_id,outcome='error',source='communication',message=f'{filename}: no evaluable response: {exc}')
-    if status>=500:
-        return dict(test_id=test_id,outcome='error',source='system',message=f'{filename}: target returned HTTP {status}.')
-    try:
-        require(status==expected_status,f'Expected HTTP {expected_status}; received {status}.')
-        media=next((v for k,v in headers.items() if k.lower()=='content-type'),'')
-        require('application/json' in media.lower(),f'Expected application/json; received {media}.')
-        result=json.loads(body)
-        if code:
-            validate('Error',result)
-            require(result['error_code']==code,f"Expected {code}; received {result['error_code']}.")
-            require(bool(result['message'].strip()),'Error message is empty.')
-        else:validate_success(result,filename,original)
-    except (AssertionError,ValueError,KeyError,TypeError) as exc:
-        return dict(test_id=test_id,outcome='fail',message=f'{filename}: {exc}')
-    return dict(test_id=test_id,outcome='pass',message=f'{filename}: shared v0.3.0 HTTP status, JSON schema and input/output integrity verified.')

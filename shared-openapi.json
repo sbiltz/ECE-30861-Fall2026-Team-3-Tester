@@ -2,8 +2,8 @@
   "openapi": "3.0.3",
   "info": {
     "title": "Pod PDF Accessibility Evaluation and Remediation API",
-    "version": "0.3.0",
-    "description": "Common web-service interface shared by Team 1 and Team 3 for cross-team testing.\nEach team implements this contract independently. Tests target a team by its base URL.\n\nProject API (pod-defined): GET /health, GET /checks, POST /process.\nCourse test endpoints (required on every system): POST /test/setup, GET /test/report.\n\nState: PDFs are never stored; every /process request is independent and no reset\nis needed between tests. The only state a system keeps is its list of test\nsessions and the code coverage measured for each one (see /test/setup).\nSessions are kept in memory until the service restarts. No authentication is required.\nLimits: maximum file size 20 MB (20,971,520 bytes); no maximum page count.\nEncrypted or password-protected PDFs are not supported.\n\nChanges in 0.3.0: POST /evaluations renamed to POST /process; optional session_id\nform field added to /process; /test/setup and /test/report added; x-pod-testing\nnotes added (components, acceptance criteria, sessions, timing).\n"
+    "version": "0.4.0",
+    "description": "Common web-service interface shared by Team 1 and Team 3 for cross-team testing.\nEach team implements this contract independently. Tests target a team by its base URL.\n\nProject API (pod-defined): GET /health, GET /checks, POST /process.\nCourse test endpoints (required on every system): POST /test/setup, GET /test/report.\n\nState: PDFs are never stored; every /process request is independent and no reset\nis needed between tests. The only state a system keeps is its list of test\nsessions and the code coverage measured for each one (see /test/setup).\nSessions are kept in memory until the service restarts. No authentication is required.\nLimits: maximum file size 20 MB (20,971,520 bytes); no maximum page count.\nEncrypted or password-protected PDFs are not supported.\n\nChanges in 0.3.0: POST /evaluations renamed to POST /process; optional session_id\nform field added to /process; /test/setup and /test/report added; x-pod-testing\nnotes added (components, acceptance criteria, sessions, timing).\n\nChanges in 0.4.0 (Phase 4, detection): Finding.status adds \"detected\" for an\nauto_fixable finding that was found but not repaired (repair arrives in Phase 5).\nLocation.description says where the issue is; fix_description says what is wrong\nand how it can be fixed. POST /process takes an optional form field output:\n\"json\" (default, unchanged) or \"zip\", which returns one zip file with the\nuploaded PDF, the output PDF, the report PDF and result.json. Error code\nINVALID_REQUEST added (400, for an output value other than json or zip).\n"
   },
   "servers": [
     {
@@ -207,7 +207,7 @@
       "post": {
         "operationId": "processPdf",
         "summary": "Evaluate a PDF, repair safe issues, re-validate, and return results",
-        "description": "Runs the full pipeline on one uploaded PDF in a single request:\nvalidate input, run all eight agreed checks, classify each issue,\nrepair auto-fixable issues on a copy, re-run the affected checks, and\nreturn the output PDF, the accessibility report PDF, and structured results.\n\nProcessing stages (state changes within one request):\n  1. RECEIVED     - file arrives; nothing has been evaluated yet\n  2. VALIDATED    - file type, readability, encryption/password, and size checked;\n                    any failure ends the request with an error response (status: error)\n  3. EVALUATED    - every check listed in checks_performed has run; findings recorded\n  4. CLASSIFIED   - each finding is auto_fixable or human_review, never both\n  5. REPAIRED     - only CHK-TITLE and CHK-LANG findings are fixed, on a copy;\n                    the uploaded file is never changed\n  6. REVALIDATED  - CHK-TITLE and CHK-LANG re-run on the repaired copy\n  7. REPORTED     - output PDF, report PDF, and JSON results returned (status: completed)\nNothing about the PDF is stored after the response is sent. If session_id names a\nsession created by /test/setup, the system also records code coverage for it.\n\nHow to interpret a 200 response:\n  - outcome says whether any repairs were applied.\n  - Every finding has exactly one classification and one final status.\n  - repairs lists each attempted fix and whether it passed re-validation.\n  - new_issues_after_repair lists problems the repairs introduced.\n  - needs_human_review findings are unresolved by design, not system failures.\n  - An empty array means \"none found\", never \"not checked\".\n  - checks_performed lists only the checks that actually ran. Until all eight are\n    implemented (Phase 4), a check missing from this list was not performed and\n    must be named in limitations.\n  - compliance_statement is fixed text; a 200 never means the PDF is compliant.\n",
+        "description": "Runs the full pipeline on one uploaded PDF in a single request:\nvalidate input, run all eight agreed checks, classify each issue,\nrepair auto-fixable issues on a copy, re-run the affected checks, and\nreturn the output PDF, the accessibility report PDF, and structured results.\n\nProcessing stages (state changes within one request):\n  1. RECEIVED     - file arrives; nothing has been evaluated yet\n  2. VALIDATED    - file type, readability, encryption/password, and size checked;\n                    any failure ends the request with an error response (status: error)\n  3. EVALUATED    - every check listed in checks_performed has run; findings recorded\n  4. CLASSIFIED   - each finding is auto_fixable or human_review, never both\n  5. REPAIRED     - only CHK-TITLE and CHK-LANG findings are fixed, on a copy;\n                    the uploaded file is never changed\n  6. REVALIDATED  - CHK-TITLE and CHK-LANG re-run on the repaired copy\n  7. REPORTED     - output PDF, report PDF, and JSON results returned (status: completed)\nNothing about the PDF is stored after the response is sent. If session_id names a\nsession created by /test/setup, the system also records code coverage for it.\n\nOutput format (form field output):\n  - json (default): the EvaluationResult as JSON. Testers use this.\n  - zip: the same result as one downloadable zip file (application/zip,\n    Content-Disposition: attachment; filename=\"<file stem>_results.zip\") containing:\n      original.pdf            the uploaded PDF, byte for byte\n      <output_pdf.file_name>  the output (repaired) PDF\n      <report_pdf.file_name>  the accessibility report PDF\n      result.json             the EvaluationResult, except that output_pdf and\n                              report_pdf have no content_base64 (they are the\n                              files above)\n    Validation errors are still returned as JSON Error responses.\n\nHow to interpret a 200 response:\n  - outcome says whether any repairs were applied.\n  - Every finding has exactly one classification and one final status.\n  - repairs lists each attempted fix and whether it passed re-validation.\n  - new_issues_after_repair lists problems the repairs introduced.\n  - needs_human_review findings are unresolved by design, not system failures.\n  - An empty array means \"none found\", never \"not checked\".\n  - checks_performed lists only the checks that actually ran. Until all eight are\n    implemented (Phase 4), a check missing from this list was not performed and\n    must be named in limitations.\n  - compliance_statement is fixed text; a 200 never means the PDF is compliant.\n",
         "x-requirements": [
           "REQ-01",
           "REQ-02",
@@ -246,6 +246,15 @@
                     "type": "string",
                     "minLength": 1,
                     "description": "Optional. Test session ID from /test/setup, so the system can attribute code coverage to that session. Missing or unknown IDs do not change the response.\n"
+                  },
+                  "output": {
+                    "type": "string",
+                    "enum": [
+                      "json",
+                      "zip"
+                    ],
+                    "default": "json",
+                    "description": "Optional. \"json\" (default) returns the EvaluationResult as JSON. \"zip\" returns one zip file with original.pdf, the output PDF, the report PDF and result.json (see the description above).\n"
                   }
                 }
               }
@@ -254,8 +263,14 @@
         },
         "responses": {
           "200": {
-            "description": "Processing completed; both output PDFs and results returned",
+            "description": "Processing completed. JSON (EvaluationResult) by default; with output=zip, a zip file containing original.pdf, the output PDF, the report PDF and result.json.\n",
             "content": {
+              "application/zip": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              },
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/EvaluationResult"
@@ -357,7 +372,30 @@
             }
           },
           "400": {
-            "$ref": "#/components/responses/MissingFile"
+            "description": "No file was attached (REQ-02), or output is not \"json\" or \"zip\"",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "examples": {
+                  "missing_file": {
+                    "value": {
+                      "status": "error",
+                      "error_code": "MISSING_FILE",
+                      "message": "Request must include a PDF in the 'file' field."
+                    }
+                  },
+                  "invalid_output": {
+                    "value": {
+                      "status": "error",
+                      "error_code": "INVALID_REQUEST",
+                      "message": "output must be \"json\" or \"zip\"."
+                    }
+                  }
+                }
+              }
+            }
           },
           "413": {
             "$ref": "#/components/responses/FileTooLarge"
@@ -736,6 +774,7 @@
               "UNREADABLE_PDF",
               "ENCRYPTED_PDF",
               "PASSWORD_PROTECTED_PDF",
+              "INVALID_REQUEST",
               "PROCESSING_ERROR",
               "EXTERNAL_SERVICE_UNAVAILABLE"
             ]
@@ -765,6 +804,18 @@
           },
           "description": {
             "type": "string"
+          },
+          "bbox": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "minItems": 4,
+            "maxItems": 4,
+            "items": {
+              "type": "number"
+            },
+            "description": "Optional. Where the finding is on `page`, as [x0, y0, x1, y1] in PDF user space (points, origin at the bottom left, before page rotation), so a viewer can highlight it. Null or absent when only the page (or nothing) is known.\n"
           }
         }
       },
@@ -821,16 +872,19 @@
           "status": {
             "type": "string",
             "enum": [
+              "detected",
               "fixed",
               "repair_failed",
               "needs_human_review"
-            ]
+            ],
+            "description": "detected: auto_fixable and found, not repaired (no repair attempted). fixed / repair_failed: a repair was attempted and re-validated. needs_human_review: human_review findings, never repaired automatically.\n"
           },
           "fix_description": {
             "type": [
               "string",
               "null"
-            ]
+            ],
+            "description": "What is wrong and how it can be fixed, in plain words."
           }
         }
       },

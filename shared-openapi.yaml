@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: Pod PDF Accessibility Evaluation and Remediation API
-  version: 0.3.0
+  version: 0.4.0
   description: |
     Common web-service interface shared by Team 1 and Team 3 for cross-team testing.
     Each team implements this contract independently. Tests target a team by its base URL.
@@ -19,6 +19,14 @@ info:
     Changes in 0.3.0: POST /evaluations renamed to POST /process; optional session_id
     form field added to /process; /test/setup and /test/report added; x-pod-testing
     notes added (components, acceptance criteria, sessions, timing).
+
+    Changes in 0.4.0 (Phase 4, detection): Finding.status adds "detected" for an
+    auto_fixable finding that was found but not repaired (repair arrives in Phase 5).
+    Location.description says where the issue is; fix_description says what is wrong
+    and how it can be fixed. POST /process takes an optional form field output:
+    "json" (default, unchanged) or "zip", which returns one zip file with the
+    uploaded PDF, the output PDF, the report PDF and result.json. Error code
+    INVALID_REQUEST added (400, for an output value other than json or zip).
 servers:
   - url: '{baseUrl}'
     description: Base URL supplied by the team under test (never hard-coded)
@@ -145,6 +153,18 @@ paths:
         Nothing about the PDF is stored after the response is sent. If session_id names a
         session created by /test/setup, the system also records code coverage for it.
 
+        Output format (form field output):
+          - json (default): the EvaluationResult as JSON. Testers use this.
+          - zip: the same result as one downloadable zip file (application/zip,
+            Content-Disposition: attachment; filename="<file stem>_results.zip") containing:
+              original.pdf            the uploaded PDF, byte for byte
+              <output_pdf.file_name>  the output (repaired) PDF
+              <report_pdf.file_name>  the accessibility report PDF
+              result.json             the EvaluationResult, except that output_pdf and
+                                      report_pdf have no content_base64 (they are the
+                                      files above)
+            Validation errors are still returned as JSON Error responses.
+
         How to interpret a 200 response:
           - outcome says whether any repairs were applied.
           - Every finding has exactly one classification and one final status.
@@ -179,10 +199,24 @@ paths:
                     Optional. Test session ID from /test/setup, so the system can
                     attribute code coverage to that session. Missing or unknown IDs
                     do not change the response.
+                output:
+                  type: string
+                  enum: [json, zip]
+                  default: json
+                  description: >
+                    Optional. "json" (default) returns the EvaluationResult as JSON.
+                    "zip" returns one zip file with original.pdf, the output PDF,
+                    the report PDF and result.json (see the description above).
       responses:
         '200':
-          description: Processing completed; both output PDFs and results returned
+          description: >
+            Processing completed. JSON (EvaluationResult) by default; with output=zip,
+            a zip file containing original.pdf, the output PDF, the report PDF and result.json.
           content:
+            application/zip:
+              schema:
+                type: string
+                format: binary
             application/json:
               schema:
                 $ref: '#/components/schemas/EvaluationResult'
@@ -224,7 +258,18 @@ paths:
                 output_pdf: {file_name: example_missing_language_repaired.pdf, media_type: application/pdf, sha256: 71ac...0d, modified: true, content_base64: JVBERi0xLjcK...}
                 report_pdf: {file_name: example_missing_language_report.pdf, media_type: application/pdf, sha256: c3d2...9f, content_base64: JVBERi0xLjcK...}
         '400':
-          $ref: '#/components/responses/MissingFile'
+          description: No file was attached (REQ-02), or output is not "json" or "zip"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              examples:
+                missing_file:
+                  value: {status: error, error_code: MISSING_FILE,
+                          message: "Request must include a PDF in the 'file' field."}
+                invalid_output:
+                  value: {status: error, error_code: INVALID_REQUEST,
+                          message: 'output must be "json" or "zip".'}
         '413':
           $ref: '#/components/responses/FileTooLarge'
         '415':
@@ -456,6 +501,7 @@ components:
             - UNREADABLE_PDF
             - ENCRYPTED_PDF
             - PASSWORD_PROTECTED_PDF
+            - INVALID_REQUEST
             - PROCESSING_ERROR
             - EXTERNAL_SERVICE_UNAVAILABLE
         message:
@@ -473,6 +519,17 @@ components:
           nullable: true
         description:
           type: string
+        bbox:
+          type: array
+          nullable: true
+          minItems: 4
+          maxItems: 4
+          items:
+            type: number
+          description: >
+            Optional. Where the finding is on `page`, as [x0, y0, x1, y1] in PDF user
+            space (points, origin at the bottom left, before page rotation), so a viewer
+            can highlight it. Null or absent when only the page (or nothing) is known.
 
     Finding:
       type: object
@@ -500,10 +557,15 @@ components:
           enum: [auto_fixable, human_review]
         status:
           type: string
-          enum: [fixed, repair_failed, needs_human_review]
+          enum: [detected, fixed, repair_failed, needs_human_review]
+          description: >
+            detected: auto_fixable and found, not repaired (no repair attempted).
+            fixed / repair_failed: a repair was attempted and re-validated.
+            needs_human_review: human_review findings, never repaired automatically.
         fix_description:
           type: string
           nullable: true
+          description: What is wrong and how it can be fixed, in plain words.
 
     Repair:
       type: object

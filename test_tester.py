@@ -5,7 +5,7 @@ from pathlib import Path
 from zipfile import ZipFile
 from unittest.mock import patch
 import app
-from suite import CASES, ROOT, compare
+from suite import CASES, LEGACY_CASES, ROOT, compare
 
 
 def rewrite(raw, change):
@@ -21,7 +21,7 @@ def rewrite(raw, change):
 
 class Comparisons(unittest.TestCase):
     def test_all_supplied_baselines(self):
-        for _,name in CASES:
+        for _,name in LEGACY_CASES:
             with self.subTest(name=name):
                 raw=(ROOT/'fixtures'/'expected'/(Path(name).stem+'_review.zip')).read_bytes()
                 original=(ROOT/'fixtures'/'inputs'/name).read_bytes()
@@ -57,7 +57,7 @@ class Comparisons(unittest.TestCase):
         import suite
         from unittest.mock import patch
         with patch.dict('os.environ',{'TESTER_MODE':'contract'}):
-            for test_id,name in CASES:
+            for test_id,name in LEGACY_CASES:
                 with self.subTest(name=name):
                     raw=(ROOT/'fixtures'/'expected'/(Path(name).stem+'_review.zip')).read_bytes()
                     with ZipFile(BytesIO(raw)) as archive:result=json.loads(archive.read('report.json'))
@@ -78,7 +78,7 @@ class Comparisons(unittest.TestCase):
             response=app.run(app.Run(session_id=sid))
         self.assertEqual(response.status_code,500)
         report=app.report(sid)
-        self.assertEqual(len(report['results']),6)
+        self.assertEqual(len(report['results']),len(CASES))
         self.assertEqual(report['results'][0]['outcome'],'error')
         self.assertTrue(all(r['outcome']=='skip' for r in report['results'][1:]))
         self.assertEqual(app.run(app.Run(session_id=sid)).status_code,409)

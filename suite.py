@@ -23,6 +23,19 @@ CATALOG = {item['check_id']: item for item in SPEC['paths']['/checks']['get']['r
 LEGACY_CASES = [('T-01','BiggerThan20MB.pdf'), ('T-02','goodAccessible.pdf'),
                 ('T-03','NonPDF.docx'), ('T-04','passwordprotected.pdf'),
                 ('T-05','encrypted.pdf'), ('T-06','accessibilityIssues.pdf')]
+ISOLATED_CASES = {
+    'T-22': ('wcag-1.1.1-missing-alt.pdf', 'CHK-NONTEXT'),
+    'T-23': ('wcag-1.3.1-heading-tagged-as-paragraph.pdf', 'CHK-STRUCTURE'),
+    'T-24': ('wcag-1.3.3-location-only-instruction.pdf', 'CHK-SENSORY'),
+    'T-25': ('wcag-1.4.1-color-only-status.pdf', 'CHK-COLOR'),
+    'T-26': ('wcag-2.4.2-missing-title.pdf', 'CHK-TITLE'),
+    'T-27': ('wcag-2.4.4-ambiguous-link-purpose.pdf', 'CHK-LINK'),
+    'T-28': ('wcag-2.4.6-vague-heading.pdf', 'CHK-HEADINGS'),
+    'T-29': ('wcag-3.1.1-missing-language.pdf', 'CHK-LANG'),
+}
+OCR_CASE = ('T-30', 'ocr-unreadable-scan.pdf')
+ISSUE_FIXTURE_CHECKS = {'CHK-NONTEXT', 'CHK-STRUCTURE', 'CHK-TITLE', 'CHK-LINK', 'CHK-LANG'}
+
 CASES = LEGACY_CASES + [
     ('T-07','Health and specification version'), ('T-08','Agreed check catalog'),
     ('T-09','Missing upload'), ('T-10','Corrupted PDF'), ('T-11','Exact size boundary'),
@@ -30,15 +43,19 @@ CASES = LEGACY_CASES + [
     ('T-14','Known human-review finding'), ('T-15','Shared ZIP output'),
     ('T-16','Invalid output option'), ('T-17','ZIP validation error remains JSON'),
     ('T-18','Explicit JSON output'), ('T-19','Duplicate system session'),
-    ('T-20','Unknown system report session'), ('T-21','Phase 5 repairs and revalidation')]
+    ('T-20','Unknown system report session'), ('T-21','Phase 5 repairs and revalidation'),
+    *((test_id, filename) for test_id, (filename, _) in ISOLATED_CASES.items()),
+    OCR_CASE]
 CASE_COMPONENTS = {
     'T-01': {'COMP-VALIDATION'}, 'T-02': {'COMP-REPORT'},
     'T-03': {'COMP-VALIDATION'}, 'T-04': {'COMP-VALIDATION'}, 'T-05': {'COMP-VALIDATION'},
-    'T-06': {'COMP-REPORT'}, 'T-07': {'COMP-HEALTH'}, 'T-08': {'COMP-CATALOG'},
+    'T-06': {'COMP-REPORT','COMP-DETECTION','COMP-CLASSIFICATION'}, 'T-07': {'COMP-HEALTH'}, 'T-08': {'COMP-CATALOG'},
     'T-09': {'COMP-VALIDATION'}, 'T-10': {'COMP-VALIDATION'}, 'T-11': {'COMP-REPORT'},
     'T-12': {'COMP-DETECTION'}, 'T-13': {'COMP-DETECTION','COMP-CLASSIFICATION'},
     'T-14': {'COMP-DETECTION','COMP-CLASSIFICATION'}, 'T-15': {'COMP-REPORT'},
-    'T-16': {'COMP-VALIDATION'}, 'T-17': {'COMP-VALIDATION'}, 'T-18': {'COMP-REPORT'}}
+    'T-16': {'COMP-VALIDATION'}, 'T-17': {'COMP-VALIDATION'}, 'T-18': {'COMP-REPORT'},
+    **{test_id: {'COMP-DETECTION','COMP-CLASSIFICATION'} for test_id in ISOLATED_CASES},
+    OCR_CASE[0]: {'COMP-REPORT'}}
 
 
 def require(condition, message):
@@ -212,6 +229,10 @@ def _execute(test_id,target,sid):
         original=_input(filename)
         error_code={'T-01':'FILE_TOO_LARGE','T-03':'INVALID_FILE_TYPE','T-04':'PASSWORD_PROTECTED_PDF','T-05':'ENCRYPTED_PDF'}.get(test_id)
         kwargs['upload']=(filename,original)
+    elif test_id in ISOLATED_CASES or test_id==OCR_CASE[0]:
+        filename=dict(CASES)[test_id]
+        original=_input(filename)
+        kwargs['upload']=(filename,original)
     elif test_id=='T-09':
         kwargs['form_fields']={}
         error_code='MISSING_FILE'
@@ -256,10 +277,28 @@ def _execute(test_id,target,sid):
         validate_zip(body,headers,filename,original)
         return 'Shared output=zip archive, JSON manifest, original and PDF hashes verified.'
     result=_json_response(*response,200,'EvaluationResult')
-    if test_id=='T-12':
+    if test_id in ('T-02','T-12') or test_id in ISOLATED_CASES:
         missing=set(CATALOG)-set(result['checks_performed'])
         require(not missing,f'Expected all eight Phase 4 checks performed; missing {sorted(missing)}.')
     validate_success(result,filename,original)
+    finding_checks = {finding['check_id'] for finding in result['findings']}
+    if test_id=='T-02':
+        require(not finding_checks,f'Expected no findings; received {sorted(finding_checks)}.')
+        return 'All eight checks completed with no findings.'
+    if test_id=='T-06':
+        missing=ISSUE_FIXTURE_CHECKS-finding_checks
+        require(not missing,f'Missing expected findings for {sorted(missing)}.')
+        return 'Expected findings from all five applicable shared checks verified.'
+    if test_id in ISOLATED_CASES:
+        _, expected_check=ISOLATED_CASES[test_id]
+        require(finding_checks=={expected_check},
+                f'Expected findings only for {expected_check}; received {sorted(finding_checks)}.')
+        if CATALOG[expected_check]['classification']=='auto_fixable':
+            require(any(finding['evaluation_result']=='fail' for finding in result['findings']),
+                    f'Expected a failure for {expected_check}.')
+        return f'All eight checks completed; findings isolated to {expected_check}.'
+    if test_id==OCR_CASE[0]:
+        return 'Scan accepted with valid evaluation and PDFs. OCR transcription is outside the shared API.'
     if test_id=='T-13':
         for check in ('CHK-TITLE','CHK-LANG'):
             # issue_type is intentionally free text in the shared contract.

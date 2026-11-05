@@ -55,6 +55,7 @@ class Comparisons(unittest.TestCase):
 
     def test_contract_uses_json_and_expected_http_errors(self):
         import suite
+        from test_phase4_suite import success
         from unittest.mock import patch
         with patch.dict('os.environ',{'TESTER_MODE':'contract'}):
             for test_id,name in LEGACY_CASES:
@@ -63,7 +64,10 @@ class Comparisons(unittest.TestCase):
                     with ZipFile(BytesIO(raw)) as archive:result=json.loads(archive.read('report.json'))
                     code=result.get('error_code')
                     status={'FILE_TOO_LARGE':413,'INVALID_FILE_TYPE':415,'PASSWORD_PROTECTED_PDF':422,'ENCRYPTED_PDF':422}.get(code,200)
-                    if code:result['message']='Different valid explanation.'
+                    if code:
+                        result['message']='Different valid explanation.'
+                    else:
+                        result=success(name,suite._input(name))
                     with patch.object(suite,'request',return_value=(status,{'Content-Type':'application/json'},json.dumps(result).encode())) as request:
                         outcome=suite.run_case(test_id,name,'http://example.test','session')
                         self.assertEqual(outcome['outcome'],'pass',outcome)

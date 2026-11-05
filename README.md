@@ -37,17 +37,17 @@ and fragments are not accepted in target URLs.
 
 ## Phase 4 suite
 
-There are **21 report entries: 20 executable cases and one Phase 5 skip**.
+There are **30 report entries: 29 executable cases and one Phase 5 skip**.
 Original T-01 through T-06 retain their identifiers for comparison with older runs.
 
 | ID | Test |
 | --- | --- |
 | T-01 | Above-20-MB input: 413 FILE_TOO_LARGE |
-| T-02 | Accepted accessible fixture: JSON schema, PDF readability and integrity |
+| T-02 | Accepted accessible fixture: all eight checks run and no findings |
 | T-03 | Non-PDF: 415 INVALID_FILE_TYPE |
 | T-04 | Password protection: 422 PASSWORD_PROTECTED_PDF |
 | T-05 | Encryption: 422 ENCRYPTED_PDF |
-| T-06 | Issue fixture: valid evaluation response and integrity |
+| T-06 | Issue fixture: findings for non-text content, structure, title, link purpose, and language |
 | T-07 | Health status and current shared version |
 | T-08 | All eight catalog entries, WCAG mappings and classifications |
 | T-09 | Missing upload: 400 MISSING_FILE |
@@ -63,6 +63,23 @@ Original T-01 through T-06 retain their identifiers for comparison with older ru
 | T-19 | Duplicate target session: 409 |
 | T-20 | Unknown target report session: 404 |
 | T-21 | Phase 5 repair/revalidation: explicitly skipped |
+| T-22 | Missing map alt text: CHK-NONTEXT only |
+| T-23 | Visual heading tagged as a paragraph: CHK-STRUCTURE only |
+| T-24 | Room instructions rely on position: CHK-SENSORY only |
+| T-25 | Booking status conveyed only by color: CHK-COLOR only |
+| T-26 | Missing document title: CHK-TITLE only |
+| T-27 | Ambiguous link purpose: CHK-LINK only |
+| T-28 | Vague section heading: CHK-HEADINGS only |
+| T-29 | Missing document language: CHK-LANG only |
+| T-30 | Degraded scan: valid HTTP 200 evaluation and output PDFs |
+
+Default contract mode submits all 15 supplied files to the target's /process
+endpoint. For T-22 through T-29, all eight checks must run and every finding must
+belong to the assigned check. Multiple findings under that check are permitted.
+Human-review findings may report fail or needs_review. Title and language
+fixtures must report fail. The shared contract has no OCR transcription field
+or OCR-specific error, so T-30 checks processing and response integrity only.
+Inspect the target's OCR output separately for usable text.
 
 `detected` is a valid v0.4.0 status for an unrepaired auto_fixable finding. Human
 review findings must retain needs_human_review and must not be automatically
@@ -128,7 +145,7 @@ $report | ConvertTo-Json -Depth 20 | Set-Content report.json
 ```
 
 Setup calls use 10 seconds, project calls and coverage retrieval use 60 seconds,
-and no calls are retried. The full suite can take about 21 minutes at timeout
+and no calls are retried. The full suite can take about 30 minutes at timeout
 boundaries. Configure any tester hosting/proxy timeout accordingly or retrieve
 the saved report after a client timeout. An unreachable target should fail setup
 without running the suite; a tester failure should not be blamed on the target.

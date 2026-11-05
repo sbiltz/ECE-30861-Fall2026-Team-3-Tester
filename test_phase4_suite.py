@@ -23,13 +23,20 @@ def success(filename,original,human=False):
     result['report_pdf']['file_name']='report.pdf'
     result['checks_performed']=list(suite.CATALOG)
     result['findings']=[]
+    checks = []
     if filename=='accessibilityIssues.pdf':
-        for index,check in enumerate(('CHK-TITLE','CHK-LANG'),1):
-            definition=suite.CATALOG[check]
-            result['findings'].append({'finding_id':f'F-{index}','check_id':check,'issue_type':'implementation_specific_wording',
-                'wcag_criterion':definition['wcag_criterion'],'wcag_level':definition['wcag_level'],
-                'classification':'auto_fixable','status':'detected','evaluation_result':'fail',
-                'location':{'page':None,'description':'Document metadata'},'fix_description':'Supply correct metadata.'})
+        checks = ['CHK-TITLE','CHK-LANG','CHK-NONTEXT','CHK-STRUCTURE','CHK-LINK']
+    else:
+        checks = [check for fixture,check in suite.ISOLATED_CASES.values() if fixture==filename]
+    for index,check in enumerate(checks,1):
+        definition=suite.CATALOG[check]
+        human_review=definition['classification']=='human_review'
+        result['findings'].append({'finding_id':f'F-{index}','check_id':check,'issue_type':'implementation_specific_wording',
+            'wcag_criterion':definition['wcag_criterion'],'wcag_level':definition['wcag_level'],
+            'classification':definition['classification'],
+            'status':'needs_human_review' if human_review else 'detected',
+            'evaluation_result':'needs_review' if human_review else 'fail',
+            'location':{'page':None,'description':'Fixture defect'},'fix_description':'Address the fixture defect.'})
     if human or filename=='phase4_human_review.pdf':
         result['findings'].append({'finding_id':'F-H','check_id':'CHK-NONTEXT','issue_type':'generic_alt',
             'wcag_criterion':'1.1.1','wcag_level':'A','classification':'human_review','status':'needs_human_review',
@@ -90,9 +97,22 @@ class Phase4SuiteTests(unittest.TestCase):
     def test_full_compliant_target_passes_and_phase5_is_skipped(self):
         outcomes=[self.run_case(test_id) for test_id,_ in suite.CASES]
         self.assertEqual([r['test_id'] for r in outcomes if r['outcome']!='pass'],['T-21'],outcomes)
-        self.assertEqual(outcomes[-1]['outcome'],'skip')
+        self.assertEqual(len(outcomes),30)
         self.assertEqual(suite.coverage(outcomes)['component']['covered'],6)
         self.assertIsNone(suite.coverage(outcomes)['system']['covered'])
+
+    def test_isolated_fixture_rejects_missing_and_extra_findings(self):
+        filename, _ = suite.ISOLATED_CASES['T-26']
+        original = suite._input(filename)
+        missing = success(filename,original)
+        missing['findings'].clear()
+        missing['summary']['total_issues'] = 0
+        extra = success(filename,original,human=True)
+        for payload in (missing,extra):
+            with self.subTest(findings=payload['findings']):
+                outcome = self.run_case('T-26',lambda *a,**kw:response(payload))
+                self.assertEqual(outcome['outcome'],'fail')
+                self.assertIn('Expected findings only for CHK-TITLE',outcome['message'])
 
     def test_old_service_version_is_explicit_failure(self):
         outcome=self.run_case('T-07',lambda *a,**kw:response({'status':'ok','spec_version':'0.3.0'}))
@@ -180,8 +200,8 @@ class Phase4SuiteTests(unittest.TestCase):
         app.sessions[sid]={'target_url':'http://example.test','state':'ready','report':None}
         with patch.object(suite,'request',side_effect=target),patch.object(app,'read_code',return_value={'covered':None,'total':None,'basis':'Unavailable'}):
             report=app.run(app.Run(session_id=sid))
-        self.assertEqual(len(report['results']),21)
-        self.assertEqual(sum(r['outcome']=='pass' for r in report['results']),20)
+        self.assertEqual(len(report['results']),len(suite.CASES))
+        self.assertEqual(sum(r['outcome']=='pass' for r in report['results']),29)
         self.assertEqual(app.report(sid),report)
         self.assertEqual(app.run(app.Run(session_id=sid)).status_code,409)
 

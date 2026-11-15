@@ -8,17 +8,17 @@
 </style>
 </head>
 <body><main>
-<header><span class="eyebrow">TEAM 3 / ECE 30861</span><h1>PDF system tester</h1><p>Run Phase 4 contract and accessibility tests against the shared API and inspect the results.</p><a href="docs">Open interactive API explorer</a></header>
+<header><span class="eyebrow">TEAM 3 / ECE 30861</span><h1>PDF system tester</h1><p>Run Phase 5 contract and accessibility tests against the shared API and inspect the results.</p><a href="docs">Open interactive API explorer</a></header>
 <section class="card" aria-labelledby="connect"><h2 id="connect">1. Prepare your target</h2>
 <label for="target">System base URL</label><input id="target" type="url" value="http://127.0.0.1:8001" placeholder="http://127.0.0.1:8001">
-<small>Start the target system first. Use its base URL without /test or /process.</small>
+<small>Start the target system first. Use its base URL without /test or /process. Running the suite may consume the target’s configured model quota or incur API charges.</small>
 <div class="actions"><button id="setup">Create new session</button><button id="run" disabled>Run full suite</button></div>
 <label for="session">Session ID</label><input id="session" placeholder="Created by setup, or paste an existing session ID" autocomplete="off">
 <div class="actions"><button id="retrieve" class="secondary">Retrieve report</button><button id="download" class="secondary" disabled>Download report</button></div>
 <p id="status" role="status" aria-live="polite">Tester is reachable. Create a session to check the target system.</p>
 </section>
 <section class="card"><h2>2. Test results <span id="summary"></span></h2><p id="empty">No tests have run yet.</p><div class="table-wrap"><table hidden id="table"><thead><tr><th>Test</th><th>Outcome</th><th>Details</th></tr></thead><tbody id="results"></tbody></table></div></section>
-<section class="card"><h2>Coverage</h2><div id="coverage" class="coverage"><p>Available after a run.</p></div><small>Tests cover the shared v0.4.0 interface, known detection/classification cases and ZIP output. Phase 5 repairs remain deferred; coverage is not accuracy.</small></section>
+<section class="card"><h2>Coverage</h2><div id="coverage" class="coverage"><p>Available after a run.</p></div><small>The 35 cases cover the shared v0.5.0 API, detection/classification, repair/revalidation, scanned pages and ZIP output. LLM use is optional; coverage is not accuracy.</small></section>
 <details class="card"><summary>Full JSON report</summary><pre id="json">No report available.</pre></details>
 </main>
 <script>
@@ -43,7 +43,7 @@ function render(report){
 }
 $('session').addEventListener('input',buttons);
 $('setup').addEventListener('click',async()=>{busy=true;readySession=null;buttons();clearReport();$('session').value='';status('Preparing target system…');try{const result=await api('test/setup',{target_url:$('target').value.trim()});readySession=result.session_id;$('session').value=result.session_id;status('Target is ready. Run the full suite.');}catch(error){status(error.message);}finally{busy=false;buttons();}});
-$('run').addEventListener('click',async()=>{const sid=readySession;if(!sid)return;busy=true;readySession=null;buttons();clearReport();status('Running the Phase 4 suite. This can take several minutes; keep this page open.');try{render(await api('test/run',{session_id:sid}));status('Run finished. Review the results below. Create a new session to run again.');}catch(error){status(error.message+' Retrieve the report for available results; do not repeat the run.');}finally{busy=false;buttons();}});
+$('run').addEventListener('click',async()=>{const sid=readySession;if(!sid)return;busy=true;readySession=null;buttons();clearReport();status('Running the Phase 5 suite. This can take several minutes; keep this page open.');try{render(await api('test/run',{session_id:sid}));status('Run finished. Review the results below. Create a new session to run again.');}catch(error){status(error.message+' Retrieve the report for available results; do not repeat the run.');}finally{busy=false;buttons();}});
 $('retrieve').addEventListener('click',async()=>{const sid=$('session').value.trim();if(!sid){status('Enter a session ID first.');return;}busy=true;buttons();status('Retrieving saved report…');try{const report=await api('test/report?session_id='+encodeURIComponent(sid));readySession=null;render(report);status('Saved report retrieved. No tests were rerun.');}catch(error){status(error.message+' If the report is not ready, try retrieving it again later.');}finally{busy=false;buttons();}});
 $('download').addEventListener('click',()=>{if(!savedReport)return;const url=URL.createObjectURL(new Blob([JSON.stringify(savedReport,null,2)],{type:'application/json'}));const link=document.createElement('a');link.href=url;link.download='tester-report.json';link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);});
 </script></body></html>

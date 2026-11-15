@@ -7,6 +7,7 @@ from threading import Lock
 from urllib.parse import urlsplit, urlencode
 from urllib.error import URLError
 from uuid import uuid4
+from http.client import HTTPException as TransportHTTPException
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.openapi.docs import get_swagger_ui_html
@@ -18,7 +19,7 @@ from starlette.exceptions import HTTPException
 from transport import request
 from suite import CASES, run_case, coverage, validate
 
-app = FastAPI(title='Team 3 PDF accessibility tester', version='2.0.0', docs_url='/docs', redoc_url=None, openapi_url='/openapi.json', description='Run the Team 3 Phase 4 contract and detection suite against the shared pod API v0.4.0. Prepare a session, run it once, and retrieve its stored report. The browser dashboard is at /; this API explorer is at /docs and /tester.')
+app = FastAPI(title='Team 3 PDF accessibility tester', version='3.0.0', docs_url='/docs', redoc_url=None, openapi_url='/openapi.json', description='Run the Team 3 Phase 5 contract and detection suite against the shared pod API v0.5.0. Prepare a session, run it once, and retrieve its stored report. The browser dashboard is at /; this API explorer is at /docs and /tester.')
 sessions = {}
 lock = Lock()
 
@@ -77,14 +78,16 @@ def setup(body: Setup):
         try: result = json.loads(raw)
         except (ValueError, TypeError): return error('Target setup returned invalid JSON.', 500, 'system')
         if status >= 400:
-            if isinstance(result, dict) and result.get('message') and result.get('source') in ('tester','system','communication','unknown'):
-                return JSONResponse(result, status_code=status)
-            return error('Target setup returned a malformed error.', status, 'system')
+            try:
+                validate('TestError',result)
+            except AssertionError:
+                return error('Target setup returned a malformed error.', status, 'system')
+            return JSONResponse(result, status_code=status)
         if status != 201 or not isinstance(result, dict) or result.get('session_id') != sid:
             return error('Target setup must return 201 and the supplied session_id.', 500, 'system')
         try: validate('SessionRef', result)
         except AssertionError: return error('Target setup returned a malformed session reference.', 500, 'system')
-    except (URLError, OSError, TimeoutError) as exc:
+    except (URLError, OSError, TimeoutError, TransportHTTPException) as exc:
         return error(f'Target setup communication failed: {exc}', 500, 'communication')
     with lock:
         sessions[sid] = {'target_url': body.target_url, 'state': 'ready', 'report': None}
@@ -106,7 +109,7 @@ def read_code(target, sid):
         return {'covered':None, 'total':None, 'basis':f'Target code coverage unavailable: {exc}'}
 
 
-@app.post('/test/run', response_model=SuiteReport, response_model_exclude_unset=True, summary='Run the Phase 4 suite once and return the complete report', responses={400: {'model': TestError}, 404: {'model': TestError}, 409: {'model': TestError}, 500: {'model': TestError}})
+@app.post('/test/run', response_model=SuiteReport, response_model_exclude_unset=True, summary='Run the Phase 5 suite once and return the complete report', responses={400: {'model': TestError}, 404: {'model': TestError}, 409: {'model': TestError}, 500: {'model': TestError}})
 def run(body: Run):
     with lock:
         session = sessions.get(body.session_id)

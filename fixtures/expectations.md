@@ -1,4 +1,4 @@
-# Phase 4 fixture expectations
+# Phase 5 fixture expectations
 
 The original six inputs and their preliminary ZIP baselines are preserved. Those
 ZIPs are only exact-regression artifacts in optional zip-baseline mode; they do
@@ -14,7 +14,7 @@ ParentTree association, MarkInfo, valid title and en-US. Extracted page text doe
 not reproduce the chart values; no equivalent alternative table is provided.
 T-14 expects a CHK-NONTEXT human-review finding, unresolved and included in
 human_review_items. It does not prescribe issue_type wording or a fabricated
-passing alternative. No external content or model is used to create this fixture.
+passing alternative. No external content or model is used to create this fixture. Phase 5 permits AI-drafted alt text to be written, but the finding remains in human review.
 
 T-12 requires all eight check IDs in checks_performed. A catalog entry alone is
 not evidence a check ran. Other semantic findings may differ across implementations.
@@ -24,9 +24,7 @@ not evidence a check ran. Other semantic findings may differ across implementati
 T-06 requires findings from the five checks in the shared catalog that apply to
 the original issue fixture. Low contrast (WCAG 1.4.3) is outside that catalog.
 T-22 through T-29 require the assigned check to be the only check producing
-findings. T-30 checks that the target processes the valid raster PDF. OCR
-transcription quality remains a separate manual check because the API does not
-return transcribed text.
+findings. T-30 now requires 422 NO_TEXT_LAYER for the image-only raster PDF. OCR is out of scope. T-31 through T-33 generate mixed, blank and invisible-OCR-text cases to check the scope boundary.
 
 The current test set includes:
 
@@ -48,7 +46,7 @@ Should be accepted:
 - wcag-2.4.6-vague-heading.pdf (Accessibility issue listed below)
 - wcag-3.1.1-missing-language.pdf (Accessibility issue listed below)
 
-Should return no usable OCR text:
+Should be rejected with 422 NO_TEXT_LAYER (no OCR is attempted):
 - ocr-unreadable-scan.pdf (Simulated scan of a faded 1912 letter with heavily degraded text and no embedded text layer)
 
 accessibilityIssues.pdf has the following issues:
@@ -84,6 +82,6 @@ wcag-2.4.6-vague-heading.pdf has the following issues:
 wcag-3.1.1-missing-language.pdf has the following issues:
 - The garage guide is written in English. Inspect the PDF catalog and tag tree for the language setting. The catalog has no /Lang entry and the structure supplies no language override. (WCAG 3.1.1, auto-fixable)
 
-Run the OCR scan separately from the WCAG cases. The scan has no embedded text layer, and the expected OCR result is no usable transcription. OCR may return fragments or noise. The PDF structure and rendered pages were inspected independently of your checker. Exact flags and OCR output still need to be confirmed in your checker.
+The scan has no embedded text layer and must be rejected under Phase 5. A blank page is not a scanned page; an all-blank PDF is also rejected because no page has text. Invisible OCR text counts as a text layer. phase5_fixtures.py creates these boundary cases without any external model. T-21 additionally requires title/language repair records and checks the repaired PDF’s actual metadata.
 
 WCAG 2.1 reference: https://www.w3.org/TR/WCAG21/

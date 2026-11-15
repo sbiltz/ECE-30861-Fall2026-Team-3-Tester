@@ -1,63 +1,82 @@
-# Tester v0.4.0 verification — November 1, 2026 (America/Indianapolis)
+# Phase 5 tester verification — November 15, 2026
 
-## Cause and scope
+## Scope and source
 
-The tester was pinned to shared v0.3.0. The supplied current shared YAML is v0.4.0
-and allows unrepaired auto_fixable findings to use `detected`, adds INVALID_REQUEST,
-optional bounding boxes and multipart output=json/zip. Rejecting Team 1's detected
-statuses was a tester-version defect, not evidence that those statuses were invalid.
+Only the tester repository was updated. No service code was edited, no hosted
+service was contacted, and no LLM API calls or quota were used. No commits,
+pushes or deployments were performed.
 
-Only the tester repository was changed. Neither service was modified, committed,
-pushed or deployed by this repair. The previous six input and expected-ZIP artifacts
-remain unchanged. The shared YAML is byte-for-byte identical to the supplied file
-(SHA-256 d3b4217129181a94f5e657dc0ebdc1632719a31bcdc8bb971f3df17f70b6eda7).
+Canonical shared-openapi.yaml is byte-for-byte identical to the user-supplied
+phase5_withLLM_openapi.yaml (OpenAPI 3.0.3, API version 0.5.0).
+shared-openapi.json was regenerated using sync_contract.py and has a drift test.
 
-## Local verification
+## Baseline and reproduced failures
 
-- Baseline: `python -B -m unittest discover -v`: 6 tests passed.
-- Before the implementation change: all 4 new regressions failed as expected
-  (version, detected enum, INVALID_REQUEST enum, malformed optional bbox).
-- Final: `python -B -m unittest discover -v`: 31 tests passed.
-- A compliant simulated target passes all 20 executable suite cases; T-21 is a
-  deliberate Phase 5 skip. Deliberately malformed responses are rejected.
-- The real human-review fixture is tested for its image, MCID, /P and ParentTree
-  associations, and does not supply equivalent extracted text for chart values.
-- `git diff --check` passes. The shared YAML may produce Git's line-ending notice;
-  this does not indicate a content mismatch.
+The existing baseline ran 32 tests with one failure: the archived original in
+accessibilityIssues_review.zip differed from the checked-out input PDF. The
+content matched after CRLF normalization. Ten uncompressed PDF fixtures had
+checkout newline conversion, which also produced invalid cross-reference offset
+warnings. Their original Git source bytes were restored and .gitattributes now
+marks PDFs, ZIPs and DOCX files binary. Existing ZIP baselines were not rewritten.
+After this repair all original archive comparisons pass.
 
-## Live cross-team verification
+The tester otherwise targeted v0.4.0, skipped T-21 repair/revalidation, accepted
+the image-only scan, and rejected every human-review repair record. New
+regressions failed against those behaviors before the fixes. Separate tests
+reproduced that the old transport accepted responses exceeding the complete
+request time budget.
 
-The final updated suite was executed against both deployed URLs after fixture
-validation. Each run used a fresh session; project calls were not automatically
-retried. The first diagnostic fixture was improved to a properly associated raster
-chart before these final results; final and diagnostic reports remain separate.
+## Final behavior
 
-| Target | Passed | Failed | Communication/system errors | Phase 5 skipped |
-| --- | --- | --- | --- | --- |
-| Team 1: http://3.15.117.84/system | 19 | 1 | 0 | 1 |
-| Team 3: https://team3-system-756038174349.us-central1.run.app | 13 | 7 | 0 | 1 |
+- 35 executable default-contract cases; no deferred Phase 5 skip.
+- T-21 inspects title/language repair records, final status, passed validation
+  and actual output PDF metadata. The known English fixture must declare English.
+- T-30/T-32 reject scanned/image-only and entirely blank PDFs with NO_TEXT_LAYER.
+- T-31 tests mixed text/scanned/blank pages; scanned page 2 must be disclosed and
+  cannot carry the specified text-based findings.
+- T-33 accepts invisible OCR text as a text layer.
+- T-34/T-35 verify unknown/omitted optional processing-session IDs.
+- LLM fields remain optional. A rule-only simulated target passes the full suite.
+- Allowed AI alt/link draft writes remain unresolved human-review items and do
+  not increase fixed_count. Color/sensory PDF repairs and LLM use on prohibited
+  checks are rejected. Successful LLM writes record applied text.
+- Generated model wording is never compared with expected strings. The mandated
+  AI label and external-provider disclosure are checked only when LLM use is reported.
+- Setup, saved-report behavior, 10/60-second budgets, no retries, nullable coverage,
+  JSON/ZIP schemas, PDF bytes/hashes and original preservation remain covered.
 
-Team 1's prior finding-status schema rejection is gone. Its remaining failure is
-T-14: no CHK-NONTEXT human-review finding was returned for the new generic-alt-text
-chart fixture. This is a selected detection case, not a universal accuracy measure.
+## Verification commands and results
 
-Team 3 failures:
+The tester has no local .venv in this checkout. Verification reused the installed
+service environment as an interpreter only:
 
-- T-06/T-13: auto_fixable findings still use needs_human_review instead of the
-  current detected/fixed/repair_failed status semantics.
-- T-07: health advertises 0.3.0 rather than the current 0.4.0.
-- T-12: CHK-HEADINGS, CHK-LINK, CHK-SENSORY and CHK-STRUCTURE were not performed.
-- T-15: ZIP lacks shared `result.json` / `original.pdf` member names.
-- T-16: invalid output option returns 200 instead of 400 INVALID_REQUEST.
-- T-17: ZIP validation failure returns 200 instead of JSON HTTP 415.
+~~~powershell
+& 'C:/Users/sophi/Documents/Codex/ECE-30861-Fall-2026-Team-3-Project/.venv/Scripts/python.exe' -B -m unittest discover -q
+~~~
 
-These are reported service mismatches; the tester does not hide them or loosen
-the current shared contract to obtain passing scores.
+Final result: **50 tests passed**. The final automated run also blocked any
+unexpected live transport calls while allowing individual tests to supply their
+mock responses. All tests use local fixtures and controlled target responses.
+A separate simulated app.run / saved-report check passed 35/35 cases, exercised
+8/8 pod components, and validated the resulting SuiteReport model. Its output is
+explicitly named phase5_tester_simulated_report.json in this chat’s outputs.
 
-Both runs exercised 6/8 components. Team 1 reported 592/1555 code lines; Team 3
-reported code instrumentation unavailable. System-model coverage remains null
-because a consistent versioned AC definition/mapping has not been supplied.
-The final reports are named team1_final_v04_report.json and
-team3_final_v04_report.json and were saved with this chat's verification outputs.
+The supplied YAML identity and generated JSON cache were checked. git diff --check
+passed; ordinary Windows line-ending notices do not indicate a failed check.
 
-Restart/redeploy the tester to make these local changes available to podmates.
+## Limits and follow-up
+
+No live cross-team run was made. A simulated target passing does not establish
+that Team 1 or Team 3 currently passes, nor that a provider is available. Actual
+runs may consume the target’s configured model quota or incur charges.
+
+The service’s previously deferred title/language remediation is expected to be
+flagged by T-21 until implemented; the tester does not skip it to raise scores.
+Existing Rhea model behavior was not changed in the service. The tester validates
+observable responses under the supplied Phase 5 contract, which restricts LLM use.
+Coverage describes exercised components, not WCAG accuracy or certification.
+System-model coverage remains unavailable pending agreed acceptance-criterion
+meanings/mappings; target code-coverage availability remains the target’s report.
+
+Historical November 1 Phase 4 deployment scores described in the former version
+of this file are not Phase 5 verification and have not been rerun here.

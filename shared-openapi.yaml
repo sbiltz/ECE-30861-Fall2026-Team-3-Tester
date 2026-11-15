@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: Pod PDF Accessibility Evaluation and Remediation API
-  version: 0.4.0
+  version: 0.5.0
   description: |
     Common web-service interface shared by Team 1 and Team 3 for cross-team testing.
     Each team implements this contract independently. Tests target a team by its base URL.
@@ -15,6 +15,8 @@ info:
     Sessions are kept in memory until the service restarts. No authentication is required.
     Limits: maximum file size 20 MB (20,971,520 bytes); no maximum page count.
     Encrypted or password-protected PDFs are not supported.
+    Scanned PDFs without a text layer are not supported: OCR is out of scope, so a
+    PDF must contain extractable text (see NO_TEXT_LAYER under POST /process).
 
     Changes in 0.3.0: POST /evaluations renamed to POST /process; optional session_id
     form field added to /process; /test/setup and /test/report added; x-pod-testing
@@ -27,6 +29,23 @@ info:
     "json" (default, unchanged) or "zip", which returns one zip file with the
     uploaded PDF, the output PDF, the report PDF and result.json. Error code
     INVALID_REQUEST added (400, for an output value other than json or zip).
+    Location.bbox added (optional, nullable): [x0, y0, x1, y1] of the finding on its
+    page, so a viewer can highlight it.
+
+    Changes in 0.5.0 (Phase 5: repair, scope limits, LLM suggestions):
+      - Scanned PDFs: a PDF in which no page has a text layer (a scanned or
+        image-only PDF) is rejected with 422 and the new error code NO_TEXT_LAYER. A
+        PDF in which only some pages are scanned is still processed; those pages are
+        named in limitations and no text-based findings are reported for them.
+        Definitions are under POST /process ("Scanned pages").
+      - LLM-assisted suggestions: a system may use a large language model for
+        CHK-NONTEXT, CHK-LINK, CHK-COLOR, CHK-SENSORY and CHK-TITLE only. The other
+        checks use rule-based suggestions. Rules are under POST /process
+        ("Suggestions and LLM use"). All new fields are optional, so a system that
+        uses no LLM still conforms.
+      - Finding adds suggested_text and suggestion_source (both optional, nullable).
+      - Repair adds method ("rule" or "llm", optional, default "rule") and
+        applied_text (optional, nullable).
 servers:
   - url: '{baseUrl}'
     description: Base URL supplied by the team under test (never hard-coded)
@@ -36,6 +55,7 @@ servers:
 x-limits:
   max_file_size_bytes: 20971520
   max_pages: null
+  text_layer_required: true  # scanned PDFs without a text layer are rejected (NO_TEXT_LAYER)
 
 x-pod-testing:
   description: >
@@ -53,6 +73,12 @@ x-pod-testing:
   resets_and_cleanup: >
     None needed. /process keeps no data between requests, so tests may run in any
     order and do not interfere. Session records are kept until the service restarts.
+  llm_outputs: >
+    LLM text differs between runs and between systems. Tests may check that
+    suggested_text is present, that suggestion_source and Repair.method use the
+    allowed values, and that LLM use stays within the allowed checks, but never
+    compare LLM-written text word for word. A test must pass when a system uses no
+    LLM, or when its LLM was unavailable and it fell back to rule-based text.
   concurrency: >
     Multiple sessions may exist at once. A system may process session-tagged
     requests one at a time to measure coverage accurately.
@@ -101,7 +127,7 @@ paths:
                 $ref: '#/components/schemas/Health'
               example:
                 status: ok
-                spec_version: 0.3.0
+                spec_version: 0.5.0
 
   /checks:
     get:
@@ -165,6 +191,58 @@ paths:
                                       files above)
             Validation errors are still returned as JSON Error responses.
 
+        Suggestions and LLM use:
+          - Every finding has fix_description: what is wrong and how to fix it, in
+            plain words. A system may add suggested_text: the concrete text it proposes
+            (alt text, link text, a rewritten sentence, a title). suggestion_source
+            says who wrote it: "rule" (fixed or template text) or "llm".
+          - An LLM may be used only for these checks:
+              CHK-NONTEXT  draft alt text for an image (the model sees the image)
+              CHK-LINK     descriptive link text from the sentence and the link target
+              CHK-COLOR    the sentence rewritten so it does not rely on color alone
+              CHK-SENSORY  the sentence rewritten so it does not rely on shape,
+                           position or sound
+              CHK-TITLE    a title suggested from the document's content
+            CHK-LANG, CHK-HEADINGS and CHK-STRUCTURE use rule-based suggestions only.
+          - What may be written into output_pdf:
+              CHK-TITLE (auto_fixable): the title, which may be LLM-suggested. The
+                repair is recorded with method "llm" and applied_text, and the
+                finding's status is fixed or repair_failed as for any repair.
+              CHK-NONTEXT, CHK-LINK (human_review): LLM-drafted alt text, or a link's
+                accessible label, may be written into the PDF. The visible page
+                content is not changed. The repair is recorded with method "llm" and
+                applied_text, but the finding is not resolved: its status stays
+                needs_human_review, it stays in human_review_items, and it is not
+                counted in summary.fixed_count. Its validation_result says only
+                whether the text was written correctly, not whether it is accurate.
+              CHK-COLOR, CHK-SENSORY: suggestions only. The system never rewrites the
+                document's visible text.
+          - LLM text is always marked: suggestion_source "llm" in the result, and
+            labeled "AI-generated, please verify" in the report PDF.
+          - If the LLM is unavailable, slow or rate-limited, the system falls back to
+            rule-based suggestions (suggestion_source "rule"), still returns 200, and
+            names the affected checks in limitations. An LLM failure is never
+            returned as EXTERNAL_SERVICE_UNAVAILABLE or PROCESSING_ERROR, and LLM
+            calls count toward the 60-second project call limit.
+          - When an LLM was used, limitations says that document content (text, and
+            images for CHK-NONTEXT) was sent to an external model provider.
+
+        Scanned pages (OCR is out of scope):
+          - A page has a text layer when text can be extracted from it: at least one
+            non-whitespace character (for example PyMuPDF page.get_text()). Invisible
+            OCR text counts, so a PDF that has already been through OCR is accepted.
+          - A scanned page is a page with no text layer that shows at least one image.
+            A blank page (no text and no image) is not a scanned page.
+          - No page has a text layer (scanned, image-only or blank PDF): 422
+            NO_TEXT_LAYER. This check runs after the PDF has been opened, so a
+            corrupted, encrypted or password-protected file gets its own error first.
+          - Some pages are scanned: the PDF is processed. limitations names every
+            scanned page (for example "Pages 3 and 5 are scanned (no text layer); OCR
+            is not supported, so text-based checks did not run on them"), and no
+            findings from text-based checks (CHK-SENSORY, CHK-COLOR, CHK-LINK, and the
+            untagged-heading part of CHK-HEADINGS) are reported for those pages. The
+            other checks still run on them, for example CHK-NONTEXT for the page image.
+
         How to interpret a 200 response:
           - outcome says whether any repairs were applied.
           - Every finding has exactly one classification and one final status.
@@ -176,6 +254,10 @@ paths:
             implemented (Phase 4), a check missing from this list was not performed and
             must be named in limitations.
           - compliance_statement is fixed text; a 200 never means the PDF is compliant.
+          - A page named in limitations as scanned was not checked for text-based
+            issues; no text-based findings on it means "not checked", not "none found".
+          - A repair with method "llm" on a human_review finding means AI text was
+            written into the PDF for a person to verify; it does not resolve the finding.
       x-requirements: [REQ-01, REQ-02, REQ-03, REQ-04, REQ-05, REQ-06, REQ-07, REQ-08, REQ-09,
                        REQ-10, REQ-11, REQ-12, REQ-13, REQ-14, REQ-15, REQ-16, REQ-17]
       requestBody:
@@ -191,7 +273,8 @@ paths:
                   format: binary
                   description: >
                     The PDF to evaluate. Must be a readable PDF, no larger than
-                    20,971,520 bytes, and not encrypted or password-protected.
+                    20,971,520 bytes, not encrypted or password-protected, and with a
+                    text layer on at least one page (scanned PDFs need OCR first).
                 session_id:
                   type: string
                   minLength: 1
@@ -247,13 +330,19 @@ paths:
                     evaluation_result: needs_review
                     classification: human_review
                     status: needs_human_review
-                    fix_description: null
+                    fix_description: 'Alt text "image1" is a placeholder; describe what the image shows. An AI draft was added to the output PDF; please verify it.'
+                    suggested_text: Bar chart of monthly enrollment from January to June, rising from 120 to 310 students.
+                    suggestion_source: llm
                 repairs:
-                  - {repair_id: R-1, finding_id: F-1, action: Set document language to en-US, validation_result: passed}
+                  - {repair_id: R-1, finding_id: F-1, action: Set document language to en-US, validation_result: passed, method: rule, applied_text: en-US}
+                  - {repair_id: R-2, finding_id: F-2, action: Wrote AI-drafted alt text to Figure 1, validation_result: passed, method: llm,
+                     applied_text: "Bar chart of monthly enrollment from January to June, rising from 120 to 310 students."}
                 new_issues_after_repair: []
                 human_review_items: [F-2]
                 summary: {total_issues: 2, fixed_count: 1, human_review_count: 1}
-                limitations: [Checks 1.1.1, 1.3.1, 1.3.3, 1.4.1, 2.4.4, and 2.4.6 require human judgment and were not repaired]
+                limitations: [Checks 1.1.1, 1.3.1, 1.3.3, 1.4.1, 2.4.4, and 2.4.6 require human judgment and were not repaired,
+                              "AI-generated alt text was written for Figure 1 and must be verified by a person",
+                              "Document content (text and images) was sent to an external language model provider for suggestions"]
                 compliance_statement: This report does not certify ADA Title II or WCAG 2.1 conformance.
                 output_pdf: {file_name: example_missing_language_repaired.pdf, media_type: application/pdf, sha256: 71ac...0d, modified: true, content_base64: JVBERi0xLjcK...}
                 report_pdf: {file_name: example_missing_language_report.pdf, media_type: application/pdf, sha256: c3d2...9f, content_base64: JVBERi0xLjcK...}
@@ -408,15 +497,19 @@ components:
     UnprocessablePdf:
       description: >
         File is a PDF but cannot be processed because it is corrupted, unreadable,
-        encrypted, or password-protected (REQ-02)
+        encrypted, password-protected, or has no text layer on any page (a scanned
+        PDF; OCR is not supported) (REQ-02)
       content:
         application/json:
           schema:
             $ref: '#/components/schemas/Error'
-          example:
-            status: error
-            error_code: PASSWORD_PROTECTED_PDF
-            message: PDF is password-protected and cannot be opened.
+          examples:
+            password_protected:
+              value: {status: error, error_code: PASSWORD_PROTECTED_PDF,
+                      message: PDF is password-protected and cannot be opened.}
+            no_text_layer:
+              value: {status: error, error_code: NO_TEXT_LAYER,
+                      message: "Scanned PDFs without a text layer are not supported; run OCR first."}
     ProcessingError:
       description: >
         Processing failed after the file was accepted. Returned as an explicit error
@@ -501,6 +594,7 @@ components:
             - UNREADABLE_PDF
             - ENCRYPTED_PDF
             - PASSWORD_PROTECTED_PDF
+            - NO_TEXT_LAYER
             - INVALID_REQUEST
             - PROCESSING_ERROR
             - EXTERNAL_SERVICE_UNAVAILABLE
@@ -566,6 +660,20 @@ components:
           type: string
           nullable: true
           description: What is wrong and how it can be fixed, in plain words.
+        suggested_text:
+          type: string
+          nullable: true
+          description: >
+            Optional. The concrete text proposed for the fix (alt text, link text, a
+            rewritten sentence, a title). null or absent when there is none.
+        suggestion_source:
+          type: string
+          nullable: true
+          enum: [rule, llm, null]
+          description: >
+            Optional. Who wrote suggested_text: "rule" (fixed or template text) or
+            "llm" (a language model; LLM use is limited to CHK-NONTEXT, CHK-LINK,
+            CHK-COLOR, CHK-SENSORY and CHK-TITLE). null when suggested_text is null.
 
     Repair:
       type: object
@@ -580,6 +688,17 @@ components:
         validation_result:
           type: string
           enum: [passed, failed]
+        method:
+          type: string
+          enum: [rule, llm]
+          default: rule
+          description: >
+            Optional. "llm" when the written text came from a language model (an
+            LLM-suggested title, alt text or link label); "rule" otherwise.
+        applied_text:
+          type: string
+          nullable: true
+          description: Optional. The text written into the PDF by this repair.
 
     InputFile:
       type: object

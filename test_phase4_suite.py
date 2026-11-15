@@ -46,6 +46,22 @@ def success(filename,original,human=False):
     result['summary']={'total_issues':len(result['findings']),'fixed_count':0,'human_review_count':len(result['human_review_items'])}
     result['repairs']=[]
     result['new_issues_after_repair']=[]
+    metadata_findings=[f for f in result['findings'] if f['classification']=='auto_fixable']
+    if metadata_findings:
+        from pypdf import PdfWriter
+        from pypdf.generic import NameObject,TextStringObject
+        writer=PdfWriter(clone_from=BytesIO(original))
+        for index,finding in enumerate(metadata_findings,1):
+            finding['status']='fixed'
+            value='Fixture document' if finding['check_id']=='CHK-TITLE' else 'en-US'
+            if finding['check_id']=='CHK-TITLE': writer.add_metadata({'/Title':value})
+            else: writer._root_object[NameObject('/Lang')]=TextStringObject(value)
+            result['repairs'].append({'repair_id':f'R-{index}','finding_id':finding['finding_id'],'action':'Set missing metadata','validation_result':'passed','method':'rule','applied_text':value})
+        out=BytesIO();writer.write(out);edited=out.getvalue()
+        result['output_pdf'].update(sha256=hashlib.sha256(edited).hexdigest(),content_base64=base64.b64encode(edited).decode(),modified=True)
+        result['outcome']='completed_with_repairs'
+        result['summary']['fixed_count']=len(metadata_findings)
+    if filename=='phase5-mixed.pdf': result['limitations'].append('Page 2 is scanned (no text layer); text-based checks did not run there.')
     return result
 
 
@@ -55,7 +71,7 @@ def response(body,status=200,media='application/json',headers=None):
 
 def target(method,url,**kwargs):
     if url.endswith('/health'):
-        return response({'status':'ok','spec_version':'0.4.0'})
+        return response({'status':'ok','spec_version':suite.VERSION})
     if url.endswith('/checks'):
         return response({'checks':list(suite.CATALOG.values())})
     if url.endswith('/test/setup'):
@@ -71,10 +87,10 @@ def target(method,url,**kwargs):
         filename,original=upload
         code={'BiggerThan20MB.pdf':'FILE_TOO_LARGE','NonPDF.docx':'INVALID_FILE_TYPE',
               'encrypted.pdf':'ENCRYPTED_PDF','passwordprotected.pdf':'PASSWORD_PROTECTED_PDF',
-              'corrupted.pdf':'CORRUPTED_PDF'}.get(filename)
+              'corrupted.pdf':'CORRUPTED_PDF','ocr-unreadable-scan.pdf':'NO_TEXT_LAYER','phase5-blank.pdf':'NO_TEXT_LAYER'}.get(filename)
     if code:
         status={'FILE_TOO_LARGE':413,'INVALID_FILE_TYPE':415,'ENCRYPTED_PDF':422,
-                'PASSWORD_PROTECTED_PDF':422,'CORRUPTED_PDF':422,'MISSING_FILE':400,'INVALID_REQUEST':400}[code]
+                'PASSWORD_PROTECTED_PDF':422,'CORRUPTED_PDF':422,'NO_TEXT_LAYER':422,'MISSING_FILE':400,'INVALID_REQUEST':400}[code]
         return response({'status':'error','error_code':code,'message':'Known fixture rejection'},status)
     result=success(filename,original)
     if fields.get('output')=='zip':
@@ -94,11 +110,11 @@ class Phase4SuiteTests(unittest.TestCase):
         with patch.object(suite,'request',side_effect=transport),patch.dict('os.environ',{'TESTER_MODE':'contract'}):
             return suite.run_case(test_id,dict(suite.CASES)[test_id],'http://example.test/system','session')
 
-    def test_full_compliant_target_passes_and_phase5_is_skipped(self):
+    def test_full_compliant_phase5_target_passes(self):
         outcomes=[self.run_case(test_id) for test_id,_ in suite.CASES]
-        self.assertEqual([r['test_id'] for r in outcomes if r['outcome']!='pass'],['T-21'],outcomes)
-        self.assertEqual(len(outcomes),30)
-        self.assertEqual(suite.coverage(outcomes)['component']['covered'],6)
+        self.assertEqual([r['test_id'] for r in outcomes if r['outcome']!='pass'],[],outcomes)
+        self.assertEqual(len(outcomes),35)
+        self.assertEqual(suite.coverage(outcomes)['component']['covered'],8)
         self.assertIsNone(suite.coverage(outcomes)['system']['covered'])
 
     def test_isolated_fixture_rejects_missing_and_extra_findings(self):
@@ -106,7 +122,10 @@ class Phase4SuiteTests(unittest.TestCase):
         original = suite._input(filename)
         missing = success(filename,original)
         missing['findings'].clear()
-        missing['summary']['total_issues'] = 0
+        missing['summary'].update(total_issues=0,fixed_count=0)
+        missing['repairs']=[]
+        missing['outcome']='completed_no_repairs'
+        missing['output_pdf'].update(content_base64=base64.b64encode(original).decode(),sha256=hashlib.sha256(original).hexdigest(),modified=False)
         extra = success(filename,original,human=True)
         for payload in (missing,extra):
             with self.subTest(findings=payload['findings']):
@@ -117,7 +136,7 @@ class Phase4SuiteTests(unittest.TestCase):
     def test_old_service_version_is_explicit_failure(self):
         outcome=self.run_case('T-07',lambda *a,**kw:response({'status':'ok','spec_version':'0.3.0'}))
         self.assertEqual(outcome['outcome'],'fail')
-        self.assertIn('0.4.0',outcome['message'])
+        self.assertIn('0.5.0',outcome['message'])
 
     def test_declared_but_unperformed_checks_fail(self):
         def missing(*args,**kwargs):
@@ -138,7 +157,11 @@ class Phase4SuiteTests(unittest.TestCase):
         def missing(*args,**kwargs):
             result=success(*kwargs['upload'])
             result['findings']=[]
-            result['summary']['total_issues']=0
+            result['repairs']=[]
+            result['outcome']='completed_no_repairs'
+            result['output_pdf'].update(content_base64=base64.b64encode(kwargs['upload'][1]).decode(),sha256=hashlib.sha256(kwargs['upload'][1]).hexdigest(),modified=False)
+            result['summary'].update(total_issues=0,fixed_count=0,human_review_count=0)
+            result['human_review_items']=[]
             return response(result)
         self.assertEqual(self.run_case('T-13',missing)['outcome'],'fail')
 
@@ -153,7 +176,7 @@ class Phase4SuiteTests(unittest.TestCase):
         original=suite._input('accessibilityIssues.pdf')
         result=success('accessibilityIssues.pdf',original)
         result['findings'][0]['status']='needs_human_review'
-        with self.assertRaisesRegex(AssertionError,'v0.4.0 auto_fixable'):
+        with self.assertRaisesRegex(AssertionError,'status'):
             suite.validate_success(result,'accessibilityIssues.pdf',original)
 
     def test_wrong_output_digest_and_missing_review_ids_fail(self):
@@ -201,7 +224,7 @@ class Phase4SuiteTests(unittest.TestCase):
         with patch.object(suite,'request',side_effect=target),patch.object(app,'read_code',return_value={'covered':None,'total':None,'basis':'Unavailable'}):
             report=app.run(app.Run(session_id=sid))
         self.assertEqual(len(report['results']),len(suite.CASES))
-        self.assertEqual(sum(r['outcome']=='pass' for r in report['results']),29)
+        self.assertEqual(sum(r['outcome']=='pass' for r in report['results']),35)
         self.assertEqual(app.report(sid),report)
         self.assertEqual(app.run(app.Run(session_id=sid)).status_code,409)
 
@@ -219,7 +242,8 @@ class TransportTests(unittest.TestCase):
         self.assertEqual(request.get_header('Accept'),'application/zip')
         self.assertIn(b'name="output"\r\n\r\nzip',request.data)
         self.assertIn(b'name="session_id"\r\n\r\nsid',request.data)
-        self.assertEqual(call.call_args.kwargs['timeout'],60)
+        self.assertGreater(call.call_args.kwargs['timeout'],0)
+        self.assertLessEqual(call.call_args.kwargs['timeout'],60)
 
     def test_missing_upload_can_still_send_session_field(self):
         import transport

@@ -4,7 +4,7 @@ import suite
 
 class SharedV04Regressions(unittest.TestCase):
     def test_current_shared_version_is_loaded(self):
-        self.assertEqual(suite.SPEC['info']['version'],'0.4.0')
+        self.assertEqual(suite.SPEC['info']['version'],'0.5.0')
 
     def test_detected_status_is_valid_for_unrepaired_auto_fixable_issue(self):
         suite.validate('Finding',{'finding_id':'F-1','check_id':'CHK-TITLE',

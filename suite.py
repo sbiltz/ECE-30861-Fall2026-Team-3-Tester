@@ -1,4 +1,4 @@
-"""Pod v0.4.0 contract and Phase 4 detection tests; no project-call retries."""
+"""Pod v0.5.0 contract, detection and repair tests; no project-call retries."""
 import base64
 import copy
 import hashlib
@@ -34,6 +34,9 @@ ISOLATED_CASES = {
     'T-29': ('wcag-3.1.1-missing-language.pdf', 'CHK-LANG'),
 }
 OCR_CASE = ('T-30', 'ocr-unreadable-scan.pdf')
+PHASE5_CASES = [('T-31','Mixed text/scanned/blank pages'), ('T-32','Blank PDF without text'), ('T-33','Invisible OCR text layer'), ('T-34','Unknown processing session'), ('T-35','Missing processing session')]
+LLM_CHECKS = {'CHK-NONTEXT','CHK-LINK','CHK-COLOR','CHK-SENSORY','CHK-TITLE'}
+LLM_WRITE_CHECKS = {'CHK-NONTEXT','CHK-LINK','CHK-TITLE'}
 ISSUE_FIXTURE_CHECKS = {'CHK-NONTEXT', 'CHK-STRUCTURE', 'CHK-TITLE', 'CHK-LINK', 'CHK-LANG'}
 
 CASES = LEGACY_CASES + [
@@ -45,7 +48,7 @@ CASES = LEGACY_CASES + [
     ('T-18','Explicit JSON output'), ('T-19','Duplicate system session'),
     ('T-20','Unknown system report session'), ('T-21','Phase 5 repairs and revalidation'),
     *((test_id, filename) for test_id, (filename, _) in ISOLATED_CASES.items()),
-    OCR_CASE]
+    OCR_CASE] + PHASE5_CASES
 CASE_COMPONENTS = {
     'T-01': {'COMP-VALIDATION'}, 'T-02': {'COMP-REPORT'},
     'T-03': {'COMP-VALIDATION'}, 'T-04': {'COMP-VALIDATION'}, 'T-05': {'COMP-VALIDATION'},
@@ -55,7 +58,10 @@ CASE_COMPONENTS = {
     'T-14': {'COMP-DETECTION','COMP-CLASSIFICATION'}, 'T-15': {'COMP-REPORT'},
     'T-16': {'COMP-VALIDATION'}, 'T-17': {'COMP-VALIDATION'}, 'T-18': {'COMP-REPORT'},
     **{test_id: {'COMP-DETECTION','COMP-CLASSIFICATION'} for test_id in ISOLATED_CASES},
-    OCR_CASE[0]: {'COMP-REPORT'}}
+    OCR_CASE[0]: {'COMP-VALIDATION'},
+    'T-21': {'COMP-REPAIR','COMP-REVALIDATION','COMP-REPORT'},
+    'T-31': {'COMP-DETECTION','COMP-REPORT'}, 'T-32': {'COMP-VALIDATION'},
+    'T-33': {'COMP-REPORT'}, 'T-34': {'COMP-REPORT'}, 'T-35': {'COMP-REPORT'}}
 
 
 def require(condition, message):
@@ -84,8 +90,6 @@ def validate(schema_name, value):
 def validate_success(result, filename, original, *, embedded=True):
     checked = copy.deepcopy(result)
     if not embedded:
-        # The shared ZIP deliberately omits Base64; validate the remaining schema
-        # with temporary values, then validate the actual archive bytes separately.
         for key in ('output_pdf','report_pdf'):
             require('content_base64' not in checked.get(key,{}),f'ZIP result.json must omit {key}.content_base64.')
             checked[key]['content_base64'] = ''
@@ -108,27 +112,43 @@ def validate_success(result, filename, original, *, embedded=True):
     by_id = {f['finding_id']:f for f in findings}
     reviews = result['human_review_items']
     require(len(reviews)==len(set(reviews)) and set(reviews)<=set(ids),'human_review_items contains duplicates or unknown IDs.')
+    require(set(reviews)=={f['finding_id'] for f in findings if f['classification']=='human_review'},'human_review_items must contain exactly the unresolved human-review findings.')
     repairs = result['repairs']
-    repair_ids = [r['repair_id'] for r in repairs]
-    require(len(repair_ids)==len(set(repair_ids)),'Repair IDs are not unique.')
+    require(len({r['repair_id'] for r in repairs})==len(repairs),'Repair IDs are not unique.')
     for repair in repairs:
         require(repair['finding_id'] in by_id,'Repair refers to an unknown finding.')
         finding = by_id[repair['finding_id']]
-        require(finding['classification']=='auto_fixable','Human-review finding was automatically repaired.')
-        expected = 'fixed' if repair['validation_result']=='passed' else 'repair_failed'
-        require(finding['status']==expected,'Finding status does not agree with repair validation.')
+        check = finding['check_id']
+        method = repair.get('method','rule')
+        require(check not in ('CHK-COLOR','CHK-SENSORY'),f'{check} is suggestions only; PDF repair is prohibited.')
+        if method=='llm':
+            require(check in LLM_WRITE_CHECKS,f'LLM write is prohibited for {check}.')
+            require(finding.get('suggestion_source')=='llm','LLM repair must identify its finding as LLM-generated.')
+            if repair['validation_result']=='passed':
+                require(isinstance(repair.get('applied_text'),str) and repair['applied_text'].strip(),'Successful LLM repairs must record nonblank applied_text.')
+        if finding['classification']=='human_review':
+            require(check in ('CHK-NONTEXT','CHK-LINK') and method=='llm','Only LLM alt/link drafts may be written for human-review findings.')
+            require(finding['status']=='needs_human_review','AI draft write must leave the finding in human review.')
+        else:
+            require(check in ('CHK-TITLE','CHK-LANG'),'Unexpected automatic repair check.')
+            expected = 'fixed' if repair['validation_result']=='passed' else 'repair_failed'
+            require(finding['status']==expected,'Finding status does not agree with repair validation.')
     for finding in findings + result['new_issues_after_repair']:
-        definition = CATALOG[finding['check_id']]
-        require(finding['check_id'] in performed,f"Finding refers to unperformed check {finding['check_id']}.")
-        require(all(finding[key]==definition[key] for key in ('wcag_criterion','wcag_level','classification')),
-                f"WCAG/classification mapping differs for {finding['check_id']}.")
+        check = finding['check_id']
+        definition = CATALOG[check]
+        require(check in performed,f'Finding refers to unperformed check {check}.')
+        require(all(finding[key]==definition[key] for key in ('wcag_criterion','wcag_level','classification')),f'WCAG/classification mapping differs for {check}.')
+        require(isinstance(finding.get('fix_description'),str) and finding['fix_description'].strip(),'Every finding must explain the problem and fix in fix_description.')
+        source = finding.get('suggestion_source')
+        suggestion = finding.get('suggested_text')
+        if source=='llm':
+            require(check in LLM_CHECKS,f'LLM suggestions are prohibited for {check}.')
+        if suggestion is not None:
+            require(source in ('rule','llm'),'suggested_text must identify its suggestion_source.')
         if finding['classification']=='human_review':
             require(finding['status']=='needs_human_review','Human-review finding must remain needs_human_review.')
-            if finding in findings:
-                require(finding['finding_id'] in reviews,'Human-review finding is missing from human_review_items.')
         else:
-            require(finding['status'] in ('detected','fixed','repair_failed'),
-                    'v0.4.0 auto_fixable findings use detected when unrepaired, or fixed/repair_failed after repair.')
+            require(finding['status'] in ('detected','fixed','repair_failed'),'v0.5.0 auto_fixable findings use detected when unrepaired, or fixed/repair_failed after repair.')
         linked = [r for r in repairs if r['finding_id']==finding['finding_id']]
         if finding['status']=='detected':
             require(not linked,'A detected finding must not have a repair attempt.')
@@ -138,8 +158,24 @@ def validate_success(result, filename, original, *, embedded=True):
     require(summary['total_issues']==len(findings),'summary.total_issues does not match findings.')
     require(summary['fixed_count']==sum(f['status']=='fixed' for f in findings),'summary.fixed_count is inconsistent.')
     require(summary['human_review_count']==len(reviews),'summary.human_review_count is inconsistent.')
-    require(result['compliance_statement']=='This report does not certify ADA Title II or WCAG 2.1 conformance.',
-            'Missing fixed non-certification statement.')
+    applied = any(r['validation_result']=='passed' for r in repairs)
+    require(result['outcome']==('completed_with_repairs' if applied else 'completed_no_repairs'),'outcome does not agree with successful repair records.')
+    if applied:
+        require(result['output_pdf'].get('modified') is not False,'Successful repairs must not claim modified=false.')
+    require(result['compliance_statement']=='This report does not certify ADA Title II or WCAG 2.1 conformance.','Missing fixed non-certification statement.')
+    if embedded:
+        validate_llm_report(result,base64.b64decode(result['report_pdf']['content_base64'],validate=True))
+
+
+def validate_llm_report(result, report_bytes):
+    used = any(f.get('suggestion_source')=='llm' for f in result['findings']+result['new_issues_after_repair']) or any(r.get('method')=='llm' for r in result['repairs'])
+    if not used:
+        return
+    from pypdf import PdfReader
+    text = ' '.join(' '.join(p.extract_text() or '' for p in PdfReader(BytesIO(report_bytes)).pages).split()).lower()
+    require('ai-generated, please verify' in text,'Report PDF must label LLM text AI-generated, please verify.')
+    disclosure = ' '.join(result['limitations']).lower()
+    require('external' in disclosure and ('model' in disclosure or 'provider' in disclosure),'LLM use must disclose sending document content to an external model provider in limitations.')
 
 
 def validate_pdf_bytes(key,item,decoded,original,outcome):
@@ -173,6 +209,7 @@ def validate_zip(body,headers,filename,original):
             require(PurePosixPath(name).name==name and '\\' not in name and name not in expected,'Invalid/colliding ZIP output filename.')
             expected.add(name)
             validate_pdf_bytes(key,item,archive.read(name),original,result['outcome'])
+        validate_llm_report(result,archive.read(result['report_pdf']['file_name']))
         require(set(names)==expected,f'Unexpected ZIP members: {names}.')
         return result
 
@@ -233,6 +270,14 @@ def _execute(test_id,target,sid):
         filename=dict(CASES)[test_id]
         original=_input(filename)
         kwargs['upload']=(filename,original)
+        if test_id==OCR_CASE[0]: error_code='NO_TEXT_LAYER'
+    elif test_id in ('T-31','T-32','T-33'):
+        from phase5_fixtures import make_fixture
+        kind={'T-31':'mixed','T-32':'blank','T-33':'ocr-text'}[test_id]
+        filename='phase5-'+kind+'.pdf'
+        original=make_fixture(kind,ROOT)
+        kwargs['upload']=(filename,original)
+        if test_id=='T-32': error_code='NO_TEXT_LAYER'
     elif test_id=='T-09':
         kwargs['form_fields']={}
         error_code='MISSING_FILE'
@@ -249,7 +294,7 @@ def _execute(test_id,target,sid):
         filename='exactly20MB.pdf'
         kwargs['upload']=(filename,original)
     else:
-        filename='phase4_human_review.pdf' if test_id=='T-14' else 'accessibilityIssues.pdf' if test_id in ('T-12','T-13') else 'NonPDF.docx' if test_id=='T-17' else 'goodAccessible.pdf'
+        filename='phase4_human_review.pdf' if test_id=='T-14' else 'accessibilityIssues.pdf' if test_id in ('T-12','T-13','T-21') else 'NonPDF.docx' if test_id=='T-17' else 'goodAccessible.pdf'
         original=_input(filename)
         kwargs['upload']=(filename,original)
         if test_id in ('T-15','T-17'):
@@ -259,6 +304,8 @@ def _execute(test_id,target,sid):
             error_code='INVALID_REQUEST'
         if test_id=='T-17': error_code='INVALID_FILE_TYPE'
         if test_id=='T-18': kwargs['form_fields']={'output':'json'}
+        if test_id=='T-34': kwargs['session_id']=str(uuid4())
+        if test_id=='T-35': kwargs.pop('session_id',None)
     response=request('POST',target+'/process',**kwargs)
     status,headers,body=response
     if status>=500:
@@ -266,7 +313,7 @@ def _execute(test_id,target,sid):
         raise TargetUnavailable(f"HTTP {status}: {result['error_code']}: {result['message']}")
     if error_code:
         errors=error_code if isinstance(error_code,tuple) else (error_code,)
-        expected={'FILE_TOO_LARGE':413,'INVALID_FILE_TYPE':415,'PASSWORD_PROTECTED_PDF':422,'ENCRYPTED_PDF':422,'CORRUPTED_PDF':422,'UNREADABLE_PDF':422,'MISSING_FILE':400,'INVALID_REQUEST':400}[errors[0]]
+        expected={'FILE_TOO_LARGE':413,'INVALID_FILE_TYPE':415,'PASSWORD_PROTECTED_PDF':422,'ENCRYPTED_PDF':422,'CORRUPTED_PDF':422,'UNREADABLE_PDF':422,'NO_TEXT_LAYER':422,'MISSING_FILE':400,'INVALID_REQUEST':400}[errors[0]]
         result=_json_response(*response,expected,'Error')
         require(result['error_code'] in errors,f"Expected error {errors}; received {result['error_code']}.")
         require(result['message'].strip(),'Error explanation is blank.')
@@ -279,7 +326,7 @@ def _execute(test_id,target,sid):
     result=_json_response(*response,200,'EvaluationResult')
     if test_id in ('T-02','T-12') or test_id in ISOLATED_CASES:
         missing=set(CATALOG)-set(result['checks_performed'])
-        require(not missing,f'Expected all eight Phase 4 checks performed; missing {sorted(missing)}.')
+        require(not missing,f'Expected all eight Phase 5 checks performed; missing {sorted(missing)}.')
     validate_success(result,filename,original)
     finding_checks = {finding['check_id'] for finding in result['findings']}
     if test_id=='T-02':
@@ -297,8 +344,29 @@ def _execute(test_id,target,sid):
             require(any(finding['evaluation_result']=='fail' for finding in result['findings']),
                     f'Expected a failure for {expected_check}.')
         return f'All eight checks completed; findings isolated to {expected_check}.'
-    if test_id==OCR_CASE[0]:
-        return 'Scan accepted with valid evaluation and PDFs. OCR transcription is outside the shared API.'
+    if test_id=='T-21':
+        from pypdf import PdfReader
+        output=PdfReader(BytesIO(base64.b64decode(result['output_pdf']['content_base64'],validate=True)))
+        for check in ('CHK-TITLE','CHK-LANG'):
+            matches=[f for f in result['findings'] if f['check_id']==check]
+            require(bool(matches) and all(f['status']=='fixed' for f in matches),f'Phase 5 must repair and revalidate the known {check} defect.')
+            require(all(any(r['finding_id']==f['finding_id'] and r['validation_result']=='passed' for r in result['repairs']) for f in matches),f'{check} lacks a passed repair record.')
+        require(bool(output.metadata and output.metadata.title and output.metadata.title.strip()),'Repaired output PDF still lacks a document title.')
+        from re import fullmatch
+        language=output.trailer['/Root'].get('/Lang')
+        require(isinstance(language,str) and bool(fullmatch(r'[A-Za-z]{2,8}(?:-[A-Za-z0-9]{1,8})*',language)) and language.split('-')[0].lower()=='en','Repaired output PDF must declare English for this English-language fixture.')
+        require(result['outcome']=='completed_with_repairs','Known repaired defects must produce completed_with_repairs.')
+        return 'Title/language repair records, post-write metadata and validation results verified.'
+    if test_id=='T-31':
+        import re
+        require(any('scanned' in note.lower() and re.search(r'\b2\b',note) for note in result['limitations']),'Mixed PDF must name scanned page 2 in limitations.')
+        for finding in result['findings']+result['new_issues_after_repair']:
+            if finding['location'].get('page')==2:
+                require(finding['check_id'] not in ('CHK-SENSORY','CHK-COLOR','CHK-LINK'),'Scanned page 2 must not have text-based findings.')
+                require(not (finding['check_id']=='CHK-HEADINGS' and not finding['location'].get('object_ref')),'Scanned page 2 must not have untagged text-heading findings.')
+        return 'Mixed PDF accepted, scanned page disclosed and text-based findings suppressed there.'
+    if test_id=='T-33':
+        return 'Invisible OCR text counts as a text layer; PDF accepted.'
     if test_id=='T-13':
         for check in ('CHK-TITLE','CHK-LANG'):
             # issue_type is intentionally free text in the shared contract.
@@ -320,8 +388,6 @@ def run_case(test_id,filename,target,session_id):
             return dict(test_id=test_id,outcome='skip',message='Legacy ZIP-baseline mode only runs the six preliminary cases.')
         return run_zip_case(test_id,filename,target,session_id)
     if mode!='contract': raise ValueError('TESTER_MODE must be contract or zip-baseline')
-    if test_id=='T-21':
-        return dict(test_id=test_id,outcome='skip',message='Automatic repairs and post-repair validation are Phase 5; not claimed as exercised in this Phase 4 suite.')
     try:
         message=_execute(test_id,target,session_id)
     except (URLError,OSError,TimeoutError,HTTPException) as exc:
@@ -340,7 +406,7 @@ def coverage(results):
             exercised.update(CASE_COMPONENTS.get(result['test_id'],set()))
     components=SPEC['x-pod-testing']['components']['list']
     return {'component':{'covered':len(exercised),'total':len(components),
-        'basis':f'Pod v{VERSION} request-based component exercise rules. Exercised: '+(', '.join(sorted(exercised)) or 'none')+'. Exercise is not correctness; Phase 5 repair/revalidation are not exercised.'},
+        'basis':f'Pod v{VERSION} request-based component exercise rules. Exercised: '+(', '.join(sorted(exercised)) or 'none')+'. Exercise is not correctness. Repair/revalidation are exercised by T-21 when it has an evaluable response.'},
         'system':{'covered':None,'total':None,
         'basis':'Shared contract lists AC-01 through AC-10 without definitions; the supplied standalone AC list uses AC-02 through AC-13. No agreed mapping is available, so no system-model coverage is claimed.'}}
 

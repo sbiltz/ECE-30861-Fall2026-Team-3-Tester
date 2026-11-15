@@ -1,163 +1,164 @@
-# Team 3 Phase 4 PDF tester
+# Team 3 Phase 5 PDF tester
 
-This tester targets the pod's supplied **OpenAPI v0.4.0** contract. The canonical
-contract is `shared-openapi.yaml`, copied from the user-supplied `openapi.yaml`.
-Runtime schema validation reads that YAML directly and converts OpenAPI nullable
-fields to JSON Schema. `shared-openapi.json` is a generated compatibility copy,
-not a separate source of truth; a regression test detects copy drift.
+Targets the supplied **OpenAPI 0.5.0 Phase 5 with LLM suggestions** contract.
+shared-openapi.yaml is the canonical, byte-identical copy of the supplied
+phase5_withLLM_openapi.yaml. shared-openapi.json is generated from it by
+sync_contract.py, including OpenAPI nullable conversion; tests detect drift.
 
-## Start locally
+## Local setup and start
 
-```powershell
-cd "C:\Users\sophi\Documents\Codex\ECE-30861-Fall2026-Team-3-Tester"
+In PowerShell, from this repository:
+
+~~~powershell
+py -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
+$env:TESTER_MODE = 'contract'
 .\.venv\Scripts\python.exe -m uvicorn app:app --host 127.0.0.1 --port 8002 --workers 1
-```
+~~~
 
-Use `/` for the dashboard or `/docs` and `/tester` for the API explorer. Supply
-the target service base URL, including its deployment path prefix if present.
-The tester does not require editing source to switch targets. Restart after edits.
-These local changes do not deploy or restart a hosted tester.
+Open http://127.0.0.1:8002/ for the dashboard; /docs and /tester expose the API
+explorer. Start the target separately, usually on port 8001, and supply its base
+URL, including any deployment prefix. No code edits are needed to switch targets.
+Restart/redeploy the tester to load these local changes.
+
+Local verification in this chat reused the already-installed Python environment
+at C:/Users/sophi/Documents/Codex/ECE-30861-Fall-2026-Team-3-Project/.venv/Scripts/python.exe.
+No new credentials, provider configuration or service changes are needed to test
+the tester itself.
 
 ## Course tester interface
 
-- `POST /test/setup`: JSON `target_url`; creates a UUID and forwards
-  `{"session_id":"<uuid>","setup":{}}` to the target. Returns 201 only after
-  target setup succeeds with the same session ID. Setup failures create no session.
-- `POST /test/run`: JSON `session_id`; runs the suite once and stores its report.
-  A second/concurrent run returns 409. If the response is lost, retrieve the saved
-  report rather than rerunning the same session. Tester aborts save partial results.
-- `GET /test/report?session_id=...`: retrieves the stored report unchanged; 409
-  while unfinished, 404 for unknown IDs, 400 for malformed input.
+- POST /test/setup accepts JSON target_url, creates a UUID and forwards
+  {"session_id":"<uuid>","setup":{}} to the target. A matching target response
+  with HTTP 201 is required before creating a tester session. Setup never runs tests.
+- POST /test/run accepts JSON session_id, runs the suite once and saves the report.
+  Repeated/concurrent runs return 409. An aborted suite saves available results.
+- GET /test/report?session_id=... returns the saved report without rerunning it.
+  Unknown sessions return 404; unfinished runs return 409; malformed input returns 400.
 
-The target system and tester have separate setup/report endpoints and must run
-on different ports. Sessions/reports are in memory; use one worker and create a
-new session after a restart. There is no authentication. Credentials, query strings
-and fragments are not accepted in target URLs.
+The target and tester have separate setup/report endpoints and must use separate
+ports. Sessions/reports are in memory: use one worker and create a new session
+after restarting. Target URLs cannot contain credentials, queries or fragments.
 
-## Phase 4 suite
+## Phase 5 cases
 
-There are **30 report entries: 29 executable cases and one Phase 5 skip**.
-Original T-01 through T-06 retain their identifiers for comparison with older runs.
+There are **35 executable contract cases**, with no deferred Phase 5 skip.
+The original case IDs remain stable; T-21 and T-30 now have Phase 5 expectations.
 
-| ID | Test |
+| ID | Expected behavior |
 | --- | --- |
-| T-01 | Above-20-MB input: 413 FILE_TOO_LARGE |
-| T-02 | Accepted accessible fixture: all eight checks run and no findings |
+| T-01 | Above 20,971,520 bytes: 413 FILE_TOO_LARGE |
+| T-02 | Accessible fixture: all eight checks, no findings |
 | T-03 | Non-PDF: 415 INVALID_FILE_TYPE |
 | T-04 | Password protection: 422 PASSWORD_PROTECTED_PDF |
 | T-05 | Encryption: 422 ENCRYPTED_PDF |
-| T-06 | Issue fixture: findings for non-text content, structure, title, link purpose, and language |
-| T-07 | Health status and current shared version |
-| T-08 | All eight catalog entries, WCAG mappings and classifications |
-| T-09 | Missing upload: 400 MISSING_FILE |
+| T-06 | Issue fixture: findings for its five applicable agreed checks |
+| T-07 | Health: status ok, spec_version 0.5.0 |
+| T-08 | All eight agreed catalog mappings and classifications |
+| T-09 | Missing file: 400 MISSING_FILE |
 | T-10 | Corrupt PDF: 422 CORRUPTED_PDF or UNREADABLE_PDF |
-| T-11 | Exactly 20,971,520 bytes: accepted if otherwise valid |
-| T-12 | All eight Phase 4 checks actually listed in checks_performed |
-| T-13 | Predetermined title/language findings and classifications |
-| T-14 | Predetermined generic Figure alternative remains unresolved human review |
-| T-15 | Shared output=zip format and archive/PDF integrity |
-| T-16 | Invalid output option: 400 INVALID_REQUEST |
-| T-17 | output=zip input validation still returns JSON and correct error status |
-| T-18 | Explicit output=json returns the JSON result |
+| T-11 | Exactly 20,971,520 bytes: accepted when otherwise valid |
+| T-12 | All eight checks actually ran, not just catalog declarations |
+| T-13 | Known title/language findings and classification |
+| T-14 | Generic Figure alternative: unresolved human-review finding; permitted AI draft writes accepted |
+| T-15 | output=zip: original.pdf, named edited/report PDFs and result.json |
+| T-16 | Invalid output: 400 INVALID_REQUEST |
+| T-17 | ZIP input errors still use JSON and proper error status |
+| T-18 | Explicit output=json returns EvaluationResult |
 | T-19 | Duplicate target session: 409 |
 | T-20 | Unknown target report session: 404 |
-| T-21 | Phase 5 repair/revalidation: explicitly skipped |
-| T-22 | Missing map alt text: CHK-NONTEXT only |
-| T-23 | Visual heading tagged as a paragraph: CHK-STRUCTURE only |
-| T-24 | Room instructions rely on position: CHK-SENSORY only |
-| T-25 | Booking status conveyed only by color: CHK-COLOR only |
-| T-26 | Missing document title: CHK-TITLE only |
-| T-27 | Ambiguous link purpose: CHK-LINK only |
-| T-28 | Vague section heading: CHK-HEADINGS only |
-| T-29 | Missing document language: CHK-LANG only |
-| T-30 | Degraded scan: valid HTTP 200 evaluation and output PDFs |
+| T-21 | Known missing title/language repaired and revalidated; output metadata inspected |
+| T-22 | Missing map alt: CHK-NONTEXT |
+| T-23 | Visual heading tagged as paragraph: CHK-STRUCTURE |
+| T-24 | Location-only instructions: CHK-SENSORY |
+| T-25 | Color-only booking status: CHK-COLOR |
+| T-26 | Missing title: CHK-TITLE |
+| T-27 | Ambiguous link purpose: CHK-LINK |
+| T-28 | Vague heading: CHK-HEADINGS |
+| T-29 | Missing language: CHK-LANG |
+| T-30 | Image-only degraded scan: 422 NO_TEXT_LAYER |
+| T-31 | Mixed text/scanned/blank pages: accepted; scanned page 2 disclosed; specified text-based findings suppressed there |
+| T-32 | Entirely blank PDF: 422 NO_TEXT_LAYER |
+| T-33 | Invisible OCR text counts as a text layer: accepted |
+| T-34 | Unknown optional /process session_id: accepted normally |
+| T-35 | Omitted optional /process session_id: accepted normally |
 
-Default contract mode submits all 15 supplied files to the target's /process
-endpoint. For T-22 through T-29, all eight checks must run and every finding must
-belong to the assigned check. Multiple findings under that check are permitted.
-Human-review findings may report fail or needs_review. Title and language
-fixtures must report fail. The shared contract has no OCR transcription field
-or OCR-specific error, so T-30 checks processing and response integrity only.
-Inspect the target's OCR output separately for usable text.
+T-22 through T-29 use the supplied isolated defect fixtures. They expect all
+eight checks and findings for the assigned criterion; multiple findings under
+that check are allowed. Text generated by a model is never compared word for word.
+See fixtures/expectations.md for known defects and fixture scope.
 
-`detected` is a valid v0.4.0 status for an unrepaired auto_fixable finding. Human
-review findings must retain needs_human_review and must not be automatically
-repaired. The suite checks agreed WCAG/classification mappings, finding identifiers,
-repair/status consistency, review references, summary counts, PDF hashes and original
-preservation. It does not enforce another team's issue_type wording, report prose,
-generated UUID/PDF bytes, or exact implementation-specific finding counts.
+## LLM, repair and report validation
 
-`fixtures/expectations.md` records why known title/language and human-review cases
-are expected. These are selected detection examples, not proof of all semantic
-checks' accuracy. T-12 checks execution coverage separately from catalog declaration.
+A system may use no LLM. All new LLM fields remain optional, so rule-only results
+are accepted. No test requires a particular provider, model, draft wording or
+number of AI-generated findings.
 
-## Shared ZIP contract versus old Team 3 ZIP extension
+When LLM use is reported, it is restricted to CHK-NONTEXT, CHK-LINK, CHK-COLOR,
+CHK-SENSORY and CHK-TITLE. CHK-LANG, CHK-HEADINGS and CHK-STRUCTURE cannot report
+LLM suggestions/writes under this supplied contract. The report must label AI
+text **AI-generated, please verify**, and limitations must disclose sending
+content to an external model/provider. Proposed text identifies its source.
 
-Default contract mode sends JSON requests. ZIP tests use the **multipart field
-`output=zip`**, not an Accept header alone. A shared ZIP contains `original.pdf`,
-the named output/report PDFs and `result.json`; its PDF metadata deliberately omits
-content_base64. Input-validation failures remain JSON 4xx responses, even with
-output=zip. The shared YAML's health example still says 0.3.0, but its declared
-info.version and change notes are 0.4.0; T-07 uses info.version.
+Only title/language findings are auto_fixable. Automatic repair status and
+validation records must agree. The optional Repair.method defaults to rule.
+Successful LLM writes record method=llm and applied_text. AI alt/link drafts can
+have repair records, but their findings stay needs_human_review, remain in
+human_review_items and never increase fixed_count. CHK-COLOR and CHK-SENSORY are
+suggestions only: repairs for those checks are rejected.
 
-The six original expected ZIPs are preserved only for optional exact regression:
+Validators also check finding/repair IDs, references, summary counts, outcome,
+PDF readability/hashes, Base64 integrity, input metadata and unchanged originals.
+The shared ZIP omits embedded PDF content_base64 in result.json; the actual PDF
+members are verified instead. Errors remain JSON even when ZIP is requested.
+Passing tests does not certify ADA Title II or WCAG 2.1 conformance.
 
-```powershell
-$env:TESTER_MODE = 'zip-baseline'
-```
+## Coverage and timing
 
-That legacy mode requests the old Accept-header ZIP extension and compares those
-six preliminary artifacts exactly (except evaluation IDs); the new cases are
-skipped. It is **not** the pod's v0.4.0 cross-team conformance mode. Use this default
-for shared testing:
+All eight pod components can be exercised; T-21 covers repair and revalidation.
+Exercise is not correctness: failed assertions can exercise components, while
+communication failures and skipped cases do not count. Code coverage is taken
+only from the target’s /test/report; null means unavailable, never a fabricated 0.
+System-model coverage remains null because the shared contract supplies AC IDs
+without definitions and no agreed mapping to the standalone AC list is available.
 
-```powershell
-$env:TESTER_MODE = 'contract'
-```
+Setup has a 10-second budget. Project calls and report retrieval have a 60-second
+whole-call budget, including response-body receipt; the tester makes no retries.
+At timeout boundaries a full run can take roughly 35 minutes plus overhead. The
+API stores reports so clients can retrieve results if their request times out.
 
-## Coverage and interpretation
+Running the contract suite against a real target can consume that target’s model
+quota or incur API charges if its model review is enabled. The tester does not
+call an LLM directly. Local unit tests use controlled target/provider responses.
 
-- Code coverage comes only from the target's `/test/report`; null means unavailable.
-  The tester does not invent a percentage when target instrumentation is absent.
-- Component coverage follows x-pod-testing request-exercise rules. This suite can
-  exercise 6 of 8 components; repair and revalidation are deferred to Phase 5.
-  A failed assertion may still exercise a component; communication failures do not.
-- System-model coverage remains null. The shared file lists AC-01 through AC-10
-  without definitions, while the separately supplied AC list uses AC-02 through
-  AC-13. The pod must agree a versioned mapping before a numeric count is claimed.
+## Legacy mode
 
-Passing this tester does not certify ADA/WCAG conformance. Correctness of every
-semantic accessibility check still requires additional agreed fixtures/manual review.
-Failures identify an observed mismatch; they are not silently accepted to improve
-the pass rate. Communication failures and target 5xx failures are reported separately.
+TESTER_MODE=zip-baseline remains an explicitly optional six-case historical
+artifact comparison. It is not Phase 5 conformance testing; all newer cases skip.
+Use TESTER_MODE=contract (the default) for the shared suite. The archived expected
+ZIP files are preserved. .gitattributes marks PDFs, ZIPs and DOCX files binary to
+prevent checkout newline conversion from damaging fixture bytes.
 
-## Run from PowerShell
+## Run through PowerShell
 
-```powershell
+~~~powershell
 $tester = 'http://127.0.0.1:8002'
 $setupBody = @{target_url='http://127.0.0.1:8001'} | ConvertTo-Json
 $session = Invoke-RestMethod -Method Post -Uri "$tester/test/setup" -ContentType 'application/json' -Body $setupBody -TimeoutSec 15
 $runBody = @{session_id=$session.session_id} | ConvertTo-Json
-$report = Invoke-RestMethod -Method Post -Uri "$tester/test/run" -ContentType 'application/json' -Body $runBody -TimeoutSec 1350
+$report = Invoke-RestMethod -Method Post -Uri "$tester/test/run" -ContentType 'application/json' -Body $runBody -TimeoutSec 2400
 $report.results | Format-Table test_id,outcome,source,message -Wrap
-$report | ConvertTo-Json -Depth 20 | Set-Content report.json
-```
+~~~
 
-Setup calls use 10 seconds, project calls and coverage retrieval use 60 seconds,
-and no calls are retried. The full suite can take about 30 minutes at timeout
-boundaries. Configure any tester hosting/proxy timeout accordingly or retrieve
-the saved report after a client timeout. An unreachable target should fail setup
-without running the suite; a tester failure should not be blamed on the target.
+Retrieve /test/report using the session ID rather than rerunning a session.
 
-## Verify the tester
+## Verify locally without live target/model calls
 
-```powershell
+~~~powershell
 .\.venv\Scripts\python.exe -B -m unittest discover -v
-```
+~~~
 
-Tests include v0.4.0 status/error/bbox regressions, the previous six baseline
-comparisons, a compliant simulated target, deliberate target defects, multipart
-form encoding, coverage accounting, and session/report preservation. Local tests
-use controlled responses and do not contact deployed services. A live cross-team
-run is a separate verification step and produces a new report/session.
+Tests include a compliant rule-only Phase 5 simulated target, deliberately invalid
+responses, optional AI draft writes, prohibited AI checks, report disclosures,
+scan/mixed/OCR behavior, request deadlines, session preservation and legacy archive
+comparisons. VERIFICATION.md records actual local results and verification limits.

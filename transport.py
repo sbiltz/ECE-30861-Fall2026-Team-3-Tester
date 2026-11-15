@@ -1,11 +1,13 @@
 """Shared JSON/form/ZIP transport, explicit timeouts and no retries."""
 import json
+from time import monotonic
 from uuid import uuid4
 from urllib.request import Request, urlopen
 from urllib.error import HTTPError
 
 
 def request(method,url,*,payload=None,upload=None,session_id=None,accept='application/json',timeout=60,form_fields=None):
+    deadline=monotonic()+timeout
     headers={'Accept':accept}
     data=None
     if payload is not None:
@@ -32,8 +34,27 @@ def request(method,url,*,payload=None,upload=None,session_id=None,accept='applic
         data=b''.join(parts)
         headers['Content-Type']=f'multipart/form-data; boundary={boundary}'
     try:
-        response=urlopen(Request(url,data=data,headers=headers,method=method),timeout=timeout)
+        remaining=deadline-monotonic()
+        if remaining<=0: raise TimeoutError('Request time limit exceeded before sending.')
+        response=urlopen(Request(url,data=data,headers=headers,method=method),timeout=remaining)
     except HTTPError as exc:
         response=exc
     with response:
-        return response.status,dict(response.headers),response.read()
+        chunks=[]
+        while True:
+            remaining=deadline-monotonic()
+            if remaining<=0: raise TimeoutError('Request time limit exceeded while receiving the response.')
+            # urllib's timeout normally applies separately to each socket read.
+            # Reduce it as the whole-call budget is consumed (HTTPError wraps an
+            # HTTPResponse, so check both possible levels).
+            for candidate in (response,getattr(response,'fp',None)):
+                raw=getattr(getattr(candidate,'fp',None),'raw',None)
+                sock=getattr(raw,'_sock',None)
+                if sock is not None:
+                    sock.settimeout(remaining)
+                    break
+            chunk=getattr(response,'read1',response.read)(64*1024)
+            if monotonic()>deadline: raise TimeoutError('Request time limit exceeded while receiving the response.')
+            if not chunk: break
+            chunks.append(chunk)
+        return response.status,dict(response.headers),b''.join(chunks)

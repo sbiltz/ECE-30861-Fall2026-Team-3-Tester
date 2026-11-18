@@ -162,3 +162,9 @@ Tests include a compliant rule-only Phase 5 simulated target, deliberately inval
 responses, optional AI draft writes, prohibited AI checks, report disclosures,
 scan/mixed/OCR behavior, request deadlines, session preservation and legacy archive
 comparisons. VERIFICATION.md records actual local results and verification limits.
+
+## Deploying
+
+Every push runs CI (ruff + unit tests); a push to `main` that passes CI deploys to Cloud Run automatically.
+Run `gh run watch --exit-status` after pushing: green ✓ = live; red ✗ = nothing deployed (GitHub also emails you; open the red step for the error).
+To redeploy `main` without a new commit: Actions → CI/CD → Run workflow.

@@ -1,8 +1,7 @@
 """Phase 5 contract regressions; controlled responses only, no live model calls."""
-import base64,copy,json,unittest
+import base64,json,unittest
 from io import BytesIO
 from unittest.mock import patch
-from urllib.error import HTTPError
 from pypdf import PdfWriter
 import suite
 from test_phase4_suite import success,response,target

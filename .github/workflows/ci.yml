@@ -1,0 +1,40 @@
+# CI on every push; on main, deploy to Cloud Run once CI passes.
+name: CI/CD
+on: [push, workflow_dispatch]   # workflow_dispatch = "Run workflow" button to redeploy main
+
+env:
+  SERVICE: team-3-tester
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12", cache: pip }   # same Python as the Docker image
+      - run: pip install -r requirements.txt ruff pip-audit
+      - run: ruff check . --select E9,F                # syntax errors, undefined names, unused imports
+      - run: python -B -m unittest discover -v
+      - run: pip-audit -r requirements.txt             # reports CVEs but never blocks a deploy
+        continue-on-error: true
+
+  deploy:
+    needs: ci                                          # never deploys code that failed CI
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    concurrency: deploy                                # queue deploys so an older commit can't land last
+    permissions: { contents: read, id-token: write }   # id-token = keyless login via Workload Identity Federation
+    steps:
+      - uses: actions/checkout@v4
+      - uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: projects/756038174349/locations/global/workloadIdentityPools/github/providers/github
+          service_account: gh-deployer@ece30861-interface.iam.gserviceaccount.com
+      - uses: google-github-actions/setup-gcloud@v3
+      - run: |
+          IMAGE=us-central1-docker.pkg.dev/ece30861-interface/cloud-run-source-deploy/$SERVICE:$GITHUB_SHA
+          gcloud auth configure-docker us-central1-docker.pkg.dev --quiet
+          docker build -t $IMAGE . && docker push $IMAGE
+          # --max-instances 1: test sessions live in memory, so one container only
+          gcloud run deploy $SERVICE --image $IMAGE --region us-central1 \
+            --max-instances 1 --update-labels commit=${GITHUB_SHA::7} --quiet

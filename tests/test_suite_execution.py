@@ -10,7 +10,7 @@ from urllib.error import URLError
 from zipfile import ZipFile
 
 import app
-import suite
+from tester import suite
 
 
 def success(filename,original,human=False):
@@ -105,7 +105,7 @@ def target(method,url,**kwargs):
     return response(result)
 
 
-class Phase4SuiteTests(unittest.TestCase):
+class SuiteExecutionTests(unittest.TestCase):
     def run_case(self,test_id,transport=target):
         with patch.object(suite,'request',side_effect=transport),patch.dict('os.environ',{'TESTER_MODE':'contract'}):
             return suite.run_case(test_id,dict(suite.CASES)[test_id],'http://example.test/system','session')
@@ -215,7 +215,7 @@ class Phase4SuiteTests(unittest.TestCase):
         self.assertNotIn('COMP-REPAIR',suite.coverage([{'test_id':'T-14','outcome':'pass'}])['component']['basis'])
 
     def test_nullable_json_cache_matches_canonical_yaml(self):
-        expected=json.loads((suite.ROOT/'shared-openapi.json').read_text())
+        expected=json.loads((suite.CONTRACT_DIR/'shared-openapi.json').read_text())
         self.assertEqual(expected,suite.json_schema(suite.SPEC))
 
     def test_app_run_preserves_full_report_and_coverage(self):
@@ -231,7 +231,7 @@ class Phase4SuiteTests(unittest.TestCase):
 
 class TransportTests(unittest.TestCase):
     def test_multipart_output_and_session_are_encoded(self):
-        import transport
+        from tester import transport
         class Reply(BytesIO):
             status=200
             headers={'Content-Type':'application/json'}
@@ -246,7 +246,7 @@ class TransportTests(unittest.TestCase):
         self.assertLessEqual(call.call_args.kwargs['timeout'],60)
 
     def test_missing_upload_can_still_send_session_field(self):
-        import transport
+        from tester import transport
         class Reply(BytesIO):
             status=400
             headers={}

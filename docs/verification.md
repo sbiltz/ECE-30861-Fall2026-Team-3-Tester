@@ -6,9 +6,9 @@ Only the tester repository was updated. No service code was edited, no hosted
 service was contacted, and no LLM API calls or quota were used. No commits,
 pushes or deployments were performed.
 
-Canonical shared-openapi.yaml is byte-for-byte identical to the user-supplied
+Canonical [shared-openapi.yaml](../contract/shared-openapi.yaml) is byte-for-byte identical to the user-supplied
 phase5_withLLM_openapi.yaml (OpenAPI 3.0.3, API version 0.5.0).
-shared-openapi.json was regenerated using sync_contract.py and has a drift test.
+[shared-openapi.json](../contract/shared-openapi.json) was regenerated using [sync_contract.py](../sync_contract.py) and has a drift test.
 
 ## Baseline and reproduced failures
 

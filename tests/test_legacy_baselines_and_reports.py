@@ -5,7 +5,7 @@ from pathlib import Path
 from zipfile import ZipFile
 from unittest.mock import patch
 import app
-from suite import CASES, LEGACY_CASES, ROOT, compare
+from tester.suite import CASES, LEGACY_CASES, ROOT, compare
 
 
 def rewrite(raw, change):
@@ -43,7 +43,7 @@ class Comparisons(unittest.TestCase):
             compare(rewrite(raw,lambda r:r.update(error_code='OTHER')),raw,name,original)
 
     def test_contract_allows_other_teams_report_wording(self):
-        from suite import validate_success
+        from tester.suite import validate_success
         raw=(ROOT/'fixtures'/'expected'/'goodAccessible_review.zip').read_bytes()
         original=(ROOT/'fixtures'/'inputs'/'goodAccessible.pdf').read_bytes()
         with ZipFile(BytesIO(raw)) as archive:result=json.loads(archive.read('report.json'))
@@ -54,8 +54,8 @@ class Comparisons(unittest.TestCase):
         with self.assertRaises(AssertionError):validate_success(result,'goodAccessible.pdf',original)
 
     def test_contract_uses_json_and_expected_http_errors(self):
-        import suite
-        from test_phase4_suite import success
+        from tester import suite
+        from tests.test_suite_execution import success
         from unittest.mock import patch
         with patch.dict('os.environ',{'TESTER_MODE':'contract'}):
             for test_id,name in LEGACY_CASES:

@@ -1,7 +1,7 @@
 from io import BytesIO
 from unittest.mock import patch
 import unittest
-import transport
+from tester import transport
 
 class TransportDeadlineTests(unittest.TestCase):
     def test_slow_body_counts_toward_whole_request_deadline_without_retry(self):

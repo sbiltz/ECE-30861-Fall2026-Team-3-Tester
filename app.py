@@ -12,12 +12,12 @@ from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.openapi.docs import get_swagger_ui_html
 from fastapi.openapi.utils import get_openapi
-from models import SessionRef, TestError, SuiteReport
+from tester.models import SessionRef, TestError, SuiteReport
 from fastapi.responses import JSONResponse, FileResponse
 from pydantic import BaseModel, StrictStr, field_validator
 from starlette.exceptions import HTTPException
-from transport import request
-from suite import CASES, run_case, coverage, validate
+from tester.transport import request
+from tester.suite import CASES, run_case, coverage, validate
 
 app = FastAPI(title='Team 3 PDF accessibility tester', version='3.0.0', docs_url='/docs', redoc_url=None, openapi_url='/openapi.json', description='Run the Team 3 Phase 5 contract and detection suite against the shared pod API v0.5.0. Prepare a session, run it once, and retrieve its stored report. The browser dashboard is at /; this API explorer is at /docs and /tester.')
 sessions = {}
@@ -156,7 +156,7 @@ def report(session_id: str):
 
 @app.get("/", include_in_schema=False)
 def homepage():
-    return FileResponse(Path(__file__).resolve().parent / "index.html", headers={"Cache-Control": "no-store"})
+    return FileResponse(Path(__file__).resolve().parent / "static" / "index.html", headers={"Cache-Control": "no-store"})
 
 
 @app.get('/tester', include_in_schema=False)

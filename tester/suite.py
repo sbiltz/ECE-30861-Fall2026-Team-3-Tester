@@ -14,10 +14,11 @@ from http.client import HTTPException
 
 from jsonschema import Draft7Validator, FormatChecker
 from ruamel.yaml import YAML
-from transport import request
+from tester.transport import request
 
-ROOT = Path(__file__).resolve().parent
-SPEC = YAML(typ='safe', pure=True).load((ROOT/'shared-openapi.yaml').read_text(encoding='utf-8'))
+ROOT = Path(__file__).resolve().parents[1]
+CONTRACT_DIR = ROOT / "contract"
+SPEC = YAML(typ='safe', pure=True).load((CONTRACT_DIR/'shared-openapi.yaml').read_text(encoding='utf-8'))
 VERSION = SPEC['info']['version']
 CATALOG = {item['check_id']: item for item in SPEC['paths']['/checks']['get']['responses']['200']['content']['application/json']['example']['checks']}
 LEGACY_CASES = [('T-01','BiggerThan20MB.pdf'), ('T-02','goodAccessible.pdf'),
@@ -272,7 +273,7 @@ def _execute(test_id,target,sid):
         kwargs['upload']=(filename,original)
         if test_id==OCR_CASE[0]: error_code='NO_TEXT_LAYER'
     elif test_id in ('T-31','T-32','T-33'):
-        from phase5_fixtures import make_fixture
+        from tester.text_layer_fixtures import make_fixture
         kind={'T-31':'mixed','T-32':'blank','T-33':'ocr-text'}[test_id]
         filename='phase5-'+kind+'.pdf'
         original=make_fixture(kind,ROOT)

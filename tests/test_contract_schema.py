@@ -1,8 +1,8 @@
 import unittest
-import suite
+from tester import suite
 
 
-class SharedV04Regressions(unittest.TestCase):
+class ContractSchemaTests(unittest.TestCase):
     def test_current_shared_version_is_loaded(self):
         self.assertEqual(suite.SPEC['info']['version'],'0.5.0')
 

@@ -82,6 +82,6 @@ wcag-2.4.6-vague-heading.pdf has the following issues:
 wcag-3.1.1-missing-language.pdf has the following issues:
 - The garage guide is written in English. Inspect the PDF catalog and tag tree for the language setting. The catalog has no /Lang entry and the structure supplies no language override. (WCAG 3.1.1, auto-fixable)
 
-The scan has no embedded text layer and must be rejected under Phase 5. A blank page is not a scanned page; an all-blank PDF is also rejected because no page has text. Invisible OCR text counts as a text layer. phase5_fixtures.py creates these boundary cases without any external model. T-21 additionally requires title/language repair records and checks the repaired PDF’s actual metadata.
+The scan has no embedded text layer and must be rejected under Phase 5. A blank page is not a scanned page; an all-blank PDF is also rejected because no page has text. Invisible OCR text counts as a text layer. [text_layer_fixtures.py](../tester/text_layer_fixtures.py) creates these boundary cases without any external model. T-21 additionally requires title/language repair records and checks the repaired PDF’s actual metadata.
 
 WCAG 2.1 reference: https://www.w3.org/TR/WCAG21/

@@ -3,10 +3,10 @@ import base64,json,unittest
 from io import BytesIO
 from unittest.mock import patch
 from pypdf import PdfWriter
-import suite
-from test_phase4_suite import success,response,target
+from tester import suite
+from tests.test_suite_execution import success,response,target
 
-class Phase5SuiteTests(unittest.TestCase):
+class InspectionTests(unittest.TestCase):
     def test_supplied_phase5_contract_is_loaded(self):
         self.assertEqual(suite.VERSION,'0.5.0')
         self.assertIn('NO_TEXT_LAYER',suite.SPEC['components']['schemas']['Error']['properties']['error_code']['enum'])
@@ -27,7 +27,7 @@ class Phase5SuiteTests(unittest.TestCase):
         result['outcome']='completed_with_repairs'
         result['limitations'].append('Document content was sent to an external language model provider.')
         # Use an actual report PDF with the required AI label.
-        from phase5_fixtures import text_pdf
+        from tester.text_layer_fixtures import text_pdf
         report=text_pdf('AI-generated, please verify')
         result['report_pdf'].update(content_base64=base64.b64encode(report).decode(),sha256=hashlib.sha256(report).hexdigest())
         suite.validate_success(result,'phase4_human_review.pdf',data)
@@ -100,7 +100,7 @@ class Phase5SuiteTests(unittest.TestCase):
         result['findings'][0].update(suggestion_source='llm',suggested_text='A chart with bars.')
         with self.assertRaisesRegex(AssertionError,'Report PDF must label'):
             suite.validate_success(result,name,data)
-        from phase5_fixtures import text_pdf
+        from tester.text_layer_fixtures import text_pdf
         import hashlib
         report=text_pdf('AI-generated, please verify')
         result['report_pdf'].update(content_base64=base64.b64encode(report).decode(),sha256=hashlib.sha256(report).hexdigest())
@@ -110,7 +110,7 @@ class Phase5SuiteTests(unittest.TestCase):
         suite.validate_success(result,name,data)
 
     def test_generated_mixed_and_ocr_fixtures_match_their_test_purpose(self):
-        from phase5_fixtures import make_fixture
+        from tester.text_layer_fixtures import make_fixture
         from pypdf import PdfReader
         mixed=PdfReader(BytesIO(make_fixture('mixed',suite.ROOT)))
         self.assertEqual(len(mixed.pages),3)
@@ -132,7 +132,7 @@ class Phase5SuiteTests(unittest.TestCase):
             if case=='T-34': self.assertNotEqual(sent['session_id'],'known-sid')
             else: self.assertNotIn('session_id',sent)
 
-class Phase5SetupTests(unittest.TestCase):
+class TargetSetupTests(unittest.TestCase):
     def test_setup_forwards_session_and_empty_data_without_running_cases(self):
         import app
         def ready(method,url,**kwargs):
